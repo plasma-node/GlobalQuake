@@ -12,22 +12,28 @@ import org.xml.sax.InputSource;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.StringReader;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public class SeedlinkCommunicator {
 
     public static final long UNKNOWN_DELAY = Long.MIN_VALUE;
-    private static final ThreadLocal<SimpleDateFormat> FORMAT_UTC_SHORT = new ThreadLocal<>();
-    private static final ThreadLocal<SimpleDateFormat> FORMAT_UTC_LONG = new ThreadLocal<>();
+
+    // Legacy SeedLink v3.x timestamp formats (no zone in the string; both are UTC).
+    // DateTimeFormatter is immutable and thread-safe, so no ThreadLocal is needed.
+    private static final DateTimeFormatter FORMAT_UTC_SHORT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter FORMAT_UTC_LONG = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSSS");
     private static final long MAX_DELAY_MS = 1000 * 60 * 60 * 24L;
 
     public static void runAvailabilityCheck(SeedlinkNetwork seedlinkNetwork, StationDatabase stationDatabase, int attempt) throws Exception {
         if(attempt > 1){
-            Logger.warn("Attempt %d / 3 to obtain available stations from %s".formatted(attempt, seedlinkNetwork.getName()));
+            Logger.warn("Attempt %d / %d to obtain available stations from %s".formatted(attempt, StationDatabaseManager.ATTEMPTS, seedlinkNetwork.getName()));
         }
 
-        seedlinkNetwork.setStatus(0, attempt == 1 ? "Connecting..." : "Connecting... (attempt %d / 3)".formatted(attempt));
+        seedlinkNetwork.setStatus(0, attempt == 1 ? "Connecting..." : "Connecting... (attempt %d / %d)".formatted(attempt, StationDatabaseManager.ATTEMPTS));
         SeedlinkReader reader = new SeedlinkReader(seedlinkNetwork.getHost(), seedlinkNetwork.getPort(), seedlinkNetwork.getTimeout(), false, seedlinkNetwork.getTimeout());
 
         seedlinkNetwork.setStatus(33, "Downloading...");
@@ -65,30 +71,39 @@ public class SeedlinkCommunicator {
                 long delay = UNKNOWN_DELAY;
 
                 try {
-                    if(FORMAT_UTC_LONG.get() == null || FORMAT_UTC_SHORT.get() == null){
-                        FORMAT_UTC_SHORT.set(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss"));
-                        FORMAT_UTC_SHORT.get().setTimeZone(TimeZone.getTimeZone("UTC"));
-
-                        FORMAT_UTC_LONG.set(new SimpleDateFormat("yyyy/MM/dd HH:mm:ss.SSSS"));
-                        FORMAT_UTC_LONG.get().setTimeZone(TimeZone.getTimeZone("UTC"));
-                    }
-
-                    Calendar end = Calendar.getInstance();
-                    end.setTime(endDate.contains("-") ? FORMAT_UTC_SHORT.get().parse(endDate) : FORMAT_UTC_LONG.get().parse(endDate));
-
-                    delay = System.currentTimeMillis() - end.getTimeInMillis();
+                    delay = System.currentTimeMillis() - parseEndTime(endDate);
 
                     if (delay > MAX_DELAY_MS) {
                         continue;
                     }
 
-                } catch(NumberFormatException e){
-                    Logger.warn(new RuntimeException("Failed to get delay from %s, %s: %s".formatted(stationCode, seedlinkNetwork.getName(), e.getMessage())));
+                } catch(Exception e){
+                    // A single unparseable/unexpected end_time must only affect this one channel
+                    // (it degrades to UNKNOWN_DELAY), never abort discovery for the whole network.
+                    Logger.warn("Failed to get delay from %s, %s: %s".formatted(stationCode, seedlinkNetwork.getName(), e.getMessage()));
                 }
 
                 addAvailableChannel(networkCode, stationCode, channelName, locationCode, delay, seedlinkNetwork, stationDatabase);
             }
         }
+    }
+
+    /**
+     * Parses a seedlink {@code end_time} attribute into epoch milliseconds (UTC).
+     * Supports the SeedLink v4 / RingServer &ge;4.0 ISO-8601 form
+     * ({@code 2026-07-09T09:24:18.060000Z}) as well as the two legacy SeedLink v3.x formats.
+     * Throws if the value matches none of them; callers treat that as {@link #UNKNOWN_DELAY}.
+     */
+    private static long parseEndTime(String endDate) {
+        // SeedLink v4 (%Y-%m-%dT%H:%M:%S.%fZ): ISO-8601 with a 'T' separator and 'Z' zone suffix.
+        // Instant.parse tolerates the variable fractional-second width RingServer emits.
+        if (endDate.indexOf('T') >= 0) {
+            return Instant.parse(endDate).toEpochMilli();
+        }
+
+        // Legacy SeedLink v3.x formats (implicitly UTC): pick by separator as before.
+        DateTimeFormatter format = endDate.indexOf('-') >= 0 ? FORMAT_UTC_SHORT : FORMAT_UTC_LONG;
+        return LocalDateTime.parse(endDate, format).toInstant(ZoneOffset.UTC).toEpochMilli();
     }
 
     private static void addAvailableChannel(String networkCode, String stationCode, String channelName, String locationCode, long delay, SeedlinkNetwork seedlinkNetwork, StationDatabase stationDatabase) {
@@ -119,6 +134,7 @@ public class SeedlinkCommunicator {
 
             seedlinkNetwork.availableStations++;
             channel.getSeedlinkNetworks().put(seedlinkNetwork, delay);
+            channel.rememberSeedlink(seedlinkNetwork); // persist so live data survives a restart before the next scan
         }finally {
             stationDatabase.getDatabaseWriteLock().unlock();
         }

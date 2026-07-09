@@ -94,11 +94,14 @@ public class StationSourcesPanel extends JPanel {
 
     private void rowSelectionChanged(ListSelectionEvent ignoredEvent) {
         var count = table.getSelectionModel().getSelectedItemsCount();
-        editStationSourceAction.setEnabled(count == 1 && !manager.isUpdating());
-        removeStationSourceAction.setEnabled(count >= 1 && !manager.isUpdating());
+        // Edit/remove/add/select stay available during a background update so you can fix or delete
+        // a slow/broken source without waiting for the whole scan. Only the update action itself is
+        // gated, to avoid launching a second update on top of the running one.
+        editStationSourceAction.setEnabled(count == 1);
+        removeStationSourceAction.setEnabled(count >= 1);
         updateStationSourceAction.setEnabled(count >= 1 && !manager.isUpdating());
-        addStationSourceAction.setEnabled(!manager.isUpdating());
-        selectButton.setEnabled(!manager.isUpdating());
-        launchButton.setEnabled(!manager.isUpdating());
+        addStationSourceAction.setEnabled(true);
+        selectButton.setEnabled(true);
+        launchButton.setEnabled(true); // launch anytime; updates run in the background
     }
 }

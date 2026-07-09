@@ -79,7 +79,9 @@ public class StationDatabase implements Serializable {
         stationSources.add(new StationSource("ORFEUS", "http://www.orfeus-eu.org/fdsnws/station/1/"));
         stationSources.add(new StationSource("RESIF", "http://ws.resif.fr/fdsnws/station/1/"));
         // stationSources.add(new StationSource("SNAC NOA", "http://snac.gein.noa.gr:8080/fdsnws/station/1/"));
-        stationSources.add(new StationSource("IRIS DMC", "http://service.iris.edu/fdsnws/station/1/"));
+        // IRIS DMC migrated to EarthScope; the old http://service.iris.edu host 301-redirects to
+        // https, which HttpURLConnection will not follow (cross-protocol), so use the new URL directly.
+        stationSources.add(new StationSource("IRIS DMC", "https://service.earthscope.org/fdsnws/station/1/"));
         stationSources.add(new StationSource("NCEDC", "https://service.ncedc.org/fdsnws/station/1/"));
         stationSources.add(new StationSource("SCEDC", "http://service.scedc.caltech.edu/fdsnws/station/1/"));
         stationSources.add(new StationSource("TexNet", "http://rtserve.beg.utexas.edu/fdsnws/station/1/"));
@@ -148,6 +150,67 @@ public class StationDatabase implements Serializable {
         //seedlinkNetworks.add(new SeedlinkNetwork("Geoscience Australia", "seis-pub.ga.gov.au", 18000));
         //seedlinkNetworks.add(new SeedlinkNetwork("GSRAS (?)", "89.22.182.133", 18000));
         //seedlinkNetworks.add(new SeedlinkNetwork("Red Sìsmica de Puerto Rico", "161.35.236.45", 18000));
+    }
+
+    // Station-source endpoints that have permanently moved. Applied non-destructively on load so
+    // existing databases pick up the new URL without losing downloaded stations or selections.
+    private static final java.util.Map<String, String> MOVED_STATION_SOURCE_URLS = java.util.Map.of(
+            "http://service.iris.edu/fdsnws/station/1/", "https://service.earthscope.org/fdsnws/station/1/"
+    );
+
+    /**
+     * Rewrites any station source whose URL has permanently moved (e.g. IRIS DMC → EarthScope).
+     * The replacement keeps the same name but resets {@code lastUpdate}, so it re-downloads from the
+     * new endpoint on the next update. Networks and channel selections are left untouched.
+     */
+    public void migrateMovedStationSources() {
+        databaseWriteLock.lock();
+        try {
+            for (int i = 0; i < stationSources.size(); i++) {
+                StationSource source = stationSources.get(i);
+                String newUrl = MOVED_STATION_SOURCE_URLS.get(source.getUrl());
+                if (newUrl != null) {
+                    stationSources.set(i, new StationSource(source.getName(), newUrl));
+                    Logger.info("Migrated moved station source '%s' to %s".formatted(source.getName(), newUrl));
+                }
+            }
+        } finally {
+            databaseWriteLock.unlock();
+        }
+    }
+
+    /**
+     * Warm-starts each channel's transient seedlink map from its persisted {@code knownSeedlinkKeys},
+     * resolving those keys against the current seedlink server list. This lets stations stream from
+     * their last-known server immediately on launch, before the (background) availability scan
+     * re-populates fresh delays. Called once after the database is loaded.
+     */
+    public void restoreSeedlinkAssociations() {
+        databaseWriteLock.lock();
+        try {
+            java.util.Map<String, SeedlinkNetwork> byKey = new java.util.HashMap<>();
+            for (SeedlinkNetwork seedlinkNetwork : seedlinkNetworks) {
+                byKey.put(Channel.seedlinkKey(seedlinkNetwork), seedlinkNetwork);
+            }
+
+            int restored = 0;
+            for (Network network : networks) {
+                for (Station station : network.getStations()) {
+                    for (Channel channel : station.getChannels()) {
+                        for (String key : channel.getKnownSeedlinkKeys()) {
+                            SeedlinkNetwork seedlinkNetwork = byKey.get(key);
+                            if (seedlinkNetwork != null
+                                    && channel.getSeedlinkNetworks().putIfAbsent(seedlinkNetwork, SeedlinkCommunicator.UNKNOWN_DELAY) == null) {
+                                restored++;
+                            }
+                        }
+                    }
+                }
+            }
+            Logger.info("Restored %d persisted seedlink associations from the last session".formatted(restored));
+        } finally {
+            databaseWriteLock.unlock();
+        }
     }
 
     public List<Network> getNetworks() {

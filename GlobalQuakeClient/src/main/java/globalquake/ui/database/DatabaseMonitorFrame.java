@@ -135,7 +135,9 @@ public class DatabaseMonitorFrame extends GQFrame {
         buttonsPanel.add(btnSelectStations);
 
         btnLaunch = new JButton("Launch %s".formatted(Main.fullName));
-        btnLaunch.setEnabled(false);
+        // Launch is available immediately (using whatever is already in the saved database);
+        // station-source updates and seedlink availability checks continue in the background.
+        btnLaunch.setEnabled(true);
 
         ImageIcon launchIcon = new ImageIcon(Objects.requireNonNull(getClass().getResource("/image_icons/launchGlobalQuake.png")));
         image = launchIcon.getImage().getScaledInstance(16, 16, Image.SCALE_SMOOTH);

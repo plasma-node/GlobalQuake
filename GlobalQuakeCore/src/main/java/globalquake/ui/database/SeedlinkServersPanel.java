@@ -97,11 +97,14 @@ public class SeedlinkServersPanel extends JPanel {
 
     private void rowSelectionChanged(ListSelectionEvent ignoredEvent) {
         var count = table.getSelectionModel().getSelectedItemsCount();
-        editSeedlinkNetworkAction.setEnabled(count == 1 && !manager.isUpdating());
-        removeSeedlinkNetworkAction.setEnabled(count >= 1 && !manager.isUpdating());
+        // Edit/remove/add/select stay available during a background scan so you can fix or delete
+        // a slow/broken seedlink (e.g. one stuck timing out) without waiting for it to finish. Only
+        // the update action itself is gated, to avoid launching a second scan on top of the running one.
+        editSeedlinkNetworkAction.setEnabled(count == 1);
+        removeSeedlinkNetworkAction.setEnabled(count >= 1);
         updateSeedlinkNetworkAction.setEnabled(count >= 1 && !manager.isUpdating());
-        addSeedlinkNetworkAction.setEnabled(!manager.isUpdating());
-        selectButton.setEnabled(!manager.isUpdating());
-        launchButton.setEnabled(!manager.isUpdating());
+        addSeedlinkNetworkAction.setEnabled(true);
+        selectButton.setEnabled(true);
+        launchButton.setEnabled(true); // launch anytime; updates run in the background
     }
 }

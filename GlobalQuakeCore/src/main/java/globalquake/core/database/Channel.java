@@ -24,6 +24,13 @@ public final class Channel implements Serializable {
 
     private final Set<StationSource> stationSources = new HashSet<>();
 
+    // The live seedlinkNetworks map above is transient (rebuilt each run by the availability scan),
+    // so it is empty on a fresh launch until that scan completes — which means a station launched
+    // before the scan finishes has no server to stream from ("No data"). To avoid that, we persist
+    // a lightweight set of the seedlink servers last known to carry this channel (keyed by host:port)
+    // and use it to warm-start the live map on load. See StationDatabase#restoreSeedlinkAssociations.
+    private Set<String> knownSeedlinkKeys = new HashSet<>();
+
     public transient SeedlinkNetwork selectedSeedlinkNetwork = null;
 
     @Serial
@@ -31,6 +38,22 @@ public final class Channel implements Serializable {
         in.defaultReadObject();
 
         seedlinkNetworks = new HashMap<>();
+        if (knownSeedlinkKeys == null) { // databases saved before this field existed
+            knownSeedlinkKeys = new HashSet<>();
+        }
+    }
+
+    static String seedlinkKey(SeedlinkNetwork seedlinkNetwork) {
+        return "%s:%d".formatted(seedlinkNetwork.getHost(), seedlinkNetwork.getPort());
+    }
+
+    /** Records that {@code seedlinkNetwork} currently serves this channel, so it survives a restart. */
+    public void rememberSeedlink(SeedlinkNetwork seedlinkNetwork) {
+        knownSeedlinkKeys.add(seedlinkKey(seedlinkNetwork));
+    }
+
+    public Set<String> getKnownSeedlinkKeys() {
+        return knownSeedlinkKeys;
     }
 
     public Channel(String code, String locationCode, double sampleRate, double latitude, double longitude,

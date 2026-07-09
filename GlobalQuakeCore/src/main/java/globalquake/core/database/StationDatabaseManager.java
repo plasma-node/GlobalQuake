@@ -14,7 +14,7 @@ import java.util.concurrent.*;
 
 public class StationDatabaseManager {
 
-    private static final int ATTEMPTS = 3;
+    public static final int ATTEMPTS = 2;
     private StationDatabase stationDatabase;
 
     private final List<Runnable> updateListeners = new CopyOnWriteArrayList<>();
@@ -43,6 +43,9 @@ public class StationDatabaseManager {
                 stationDatabase = (StationDatabase) in.readObject();
                 in.close();
 
+                stationDatabase.migrateMovedStationSources();
+                stationDatabase.restoreSeedlinkAssociations();
+
                 Logger.info("Database load successfull");
             } catch (ClassNotFoundException | IOException e) {
                 GlobalQuake.getErrorHandler().handleException(
@@ -57,7 +60,7 @@ public class StationDatabaseManager {
 
     }
 
-    public void save() throws FatalIOException {
+    public synchronized void save() throws FatalIOException {
         File file = getDatabaseFile();
         if (!file.getParentFile().exists()) {
             if (!file.getParentFile().mkdirs()) {
@@ -108,12 +111,16 @@ public class StationDatabaseManager {
 
         final Object statusSync = new Object();
 
+        // Snapshot so the user can add/remove/edit sources while the update runs without a
+        // ConcurrentModificationException on this iteration.
+        final List<StationSource> sources = new java.util.ArrayList<>(toBeUpdated);
+
         new Thread(() -> {
-            toBeUpdated.forEach(stationSource -> {
+            sources.forEach(stationSource -> {
                 stationSource.getStatus().setString("Queued...");
                 stationSource.getStatus().setValue(0);
             });
-            toBeUpdated.parallelStream().forEach(stationSource -> {
+            sources.parallelStream().forEach(stationSource -> {
                 try {
                     synchronized (statusSync) {
                         stationSource.getStatus().setString("Updating...");
@@ -193,11 +200,14 @@ public class StationDatabaseManager {
 
     public void runAvailabilityCheck(List<SeedlinkNetwork> toBeUpdated, Runnable onFinish) {
         this.updating = true;
-        toBeUpdated.forEach(seedlinkNetwork -> seedlinkNetwork.setStatus(0, "Queued..."));
+        // Snapshot so the user can add/remove/edit seedlink networks while the scan runs without a
+        // ConcurrentModificationException on this iteration.
+        final List<SeedlinkNetwork> networks = new java.util.ArrayList<>(toBeUpdated);
+        networks.forEach(seedlinkNetwork -> seedlinkNetwork.setStatus(0, "Queued..."));
         fireStatusChangeEvent();
 
         new Thread(() -> {
-            toBeUpdated.parallelStream().forEach(seedlinkNetwork -> {
+            networks.parallelStream().forEach(seedlinkNetwork -> {
                         for (int attempt = 0; attempt < ATTEMPTS; attempt++) {
                             if(runSeedlinkUpdate(seedlinkNetwork, attempt + 1)){
                                 break;

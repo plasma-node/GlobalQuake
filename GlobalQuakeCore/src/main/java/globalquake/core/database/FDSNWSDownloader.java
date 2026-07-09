@@ -26,7 +26,11 @@ import java.util.*;
 public class FDSNWSDownloader {
 
     private static final DateTimeFormatter format1 = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss").withZone(ZoneId.systemDefault());
-    private static final int TIMEOUT_SECONDS = 120;
+    // Fail fast on dead/unreachable hosts (e.g. a decommissioned server) instead of hanging for
+    // two minutes. The read timeout is per-inactivity, so it still tolerates large legitimate
+    // catalogs as long as data keeps flowing.
+    private static final int CONNECT_TIMEOUT_SECONDS = 10;
+    private static final int READ_TIMEOUT_SECONDS = 30;
 
     public static final List<Character> SUPPORTED_BANDS = List.of('E', 'S', 'H', 'B', 'C', 'A');
     public static final List<Character> SUPPORTED_INSTRUMENTS = List.of('H', 'L', 'G', 'M', 'N', 'C');
@@ -35,8 +39,8 @@ public class FDSNWSDownloader {
         URL url = new URL("%sapplication.wadl".formatted(stationSource.getUrl()));
 
         HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setConnectTimeout(TIMEOUT_SECONDS * 1000);
-        con.setReadTimeout(TIMEOUT_SECONDS * 1000);
+        con.setConnectTimeout(CONNECT_TIMEOUT_SECONDS * 1000);
+        con.setReadTimeout(READ_TIMEOUT_SECONDS * 1000);
         InputStream inp = con.getInputStream();
 
         Document doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(inp);
@@ -91,8 +95,8 @@ public class FDSNWSDownloader {
         Logger.info("Connecting to " + url);
 
         HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setConnectTimeout(TIMEOUT_SECONDS * 1000);
-        con.setReadTimeout(TIMEOUT_SECONDS * 1000);
+        con.setConnectTimeout(CONNECT_TIMEOUT_SECONDS * 1000);
+        con.setReadTimeout(READ_TIMEOUT_SECONDS * 1000);
 
         int response = con.getResponseCode();
 
