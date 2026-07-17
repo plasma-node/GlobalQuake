@@ -24,11 +24,22 @@ public class SeedlinkNetworksReader {
 
 	protected static final int RECONNECT_DELAY = 10;
 	private static final int SEEDLINK_TIMEOUT = 90;
+
+	// The seedlink handshake costs two blocking round-trips PER STATION (STATION cmd + SELECT cmd),
+	// and no data flows until the whole connection finishes handshaking. Large catalogs (IRIS
+	// rtserve carries hundreds of selected stations since the SeedLink-v4 discovery fix) therefore
+	// took minutes before their first packet, which showed up as the bottom-left station counter
+	// crawling. Splitting each network across several parallel connections amortizes the
+	// round-trips; kept conservative so we don't hammer public servers with connections.
+	private static final int MAX_STATIONS_PER_CONNECTION = 64;
+	private static final int MAX_CONNECTIONS_PER_NETWORK = 6;
+
 	private Instant lastData;
 
 	private ExecutorService seedlinkReaderService;
 
 	private final Queue<SeedlinkReader> activeReaders = new ConcurrentLinkedQueue<>();
+	private final Map<SeedlinkNetwork, java.util.concurrent.atomic.AtomicInteger> activeConnections = new java.util.concurrent.ConcurrentHashMap<>();
 
 	public static void main(String[] args) throws Exception{
 		SeedlinkReader reader = new SeedlinkReader("rtserve.iris.washington.edu", 18000);
@@ -60,10 +71,46 @@ public class SeedlinkNetworksReader {
 		GlobalQuake.instance.getStationDatabaseManager().getStationDatabase().getDatabaseReadLock().lock();
 
 		try{
-			GlobalQuake.instance.getStationDatabaseManager().getStationDatabase().getSeedlinkNetworks().forEach(
-					seedlinkServer -> seedlinkReaderService.submit(() -> runSeedlinkThread(seedlinkServer, RECONNECT_DELAY)));
+			GlobalQuake.instance.getStationDatabaseManager().getStationDatabase().getSeedlinkNetworks().forEach(this::startSeedlinkNetwork);
 		} finally {
 			GlobalQuake.instance.getStationDatabaseManager().getStationDatabase().getDatabaseReadLock().unlock();
+		}
+	}
+
+	private void startSeedlinkNetwork(SeedlinkNetwork seedlinkNetwork) {
+		List<AbstractStation> networkStations = new ArrayList<>();
+		for (AbstractStation station : GlobalQuake.instance.getStationManager().getStations()) {
+			if (station.getSeedlinkNetwork() != null && station.getSeedlinkNetwork().equals(seedlinkNetwork)) {
+				networkStations.add(station);
+			}
+		}
+
+		seedlinkNetwork.status = SeedlinkStatus.CONNECTING;
+		seedlinkNetwork.connectedStations = 0;
+
+		if (networkStations.isEmpty()) {
+			Logger.info("No stations selected on " + seedlinkNetwork.getName());
+			seedlinkNetwork.status = SeedlinkStatus.DISCONNECTED;
+			return;
+		}
+
+		int connections = Math.min(MAX_CONNECTIONS_PER_NETWORK,
+				(networkStations.size() + MAX_STATIONS_PER_CONNECTION - 1) / MAX_STATIONS_PER_CONNECTION);
+		activeConnections.put(seedlinkNetwork, new java.util.concurrent.atomic.AtomicInteger(connections));
+
+		// deal stations round-robin so each connection gets an even share
+		List<List<AbstractStation>> chunks = new ArrayList<>();
+		for (int i = 0; i < connections; i++) {
+			chunks.add(new ArrayList<>());
+		}
+		for (int i = 0; i < networkStations.size(); i++) {
+			chunks.get(i % connections).add(networkStations.get(i));
+		}
+
+		Logger.info("Connecting to seedlink server \"%s\" using %d connection(s) for %d stations"
+				.formatted(seedlinkNetwork.getName(), connections, networkStations.size()));
+		for (List<AbstractStation> chunk : chunks) {
+			seedlinkReaderService.submit(() -> runSeedlinkThread(seedlinkNetwork, chunk, RECONNECT_DELAY));
 		}
 	}
 
@@ -76,13 +123,10 @@ public class SeedlinkNetworksReader {
 			}
 		}
 	}
-	private void runSeedlinkThread(SeedlinkNetwork seedlinkNetwork, int reconnectDelay) {
-		seedlinkNetwork.status = SeedlinkStatus.CONNECTING;
-		seedlinkNetwork.connectedStations = 0;
-
+	private void runSeedlinkThread(SeedlinkNetwork seedlinkNetwork, List<AbstractStation> chunk, int reconnectDelay) {
+		int chunkConnected = 0;
 		SeedlinkReader reader = null;
 		try {
-			Logger.info("Connecting to seedlink server \"" + seedlinkNetwork.getName() + "\"");
 			reader = new SeedlinkReader(seedlinkNetwork.getHost(), seedlinkNetwork.getPort(), SEEDLINK_TIMEOUT, false, SEEDLINK_TIMEOUT);
 			activeReaders.add(reader);
 
@@ -92,27 +136,31 @@ public class SeedlinkNetworksReader {
 
 			int errors = 0;
 
-			for (AbstractStation station : GlobalQuake.instance.getStationManager().getStations()) {
-				if (station.getSeedlinkNetwork() != null && station.getSeedlinkNetwork().equals(seedlinkNetwork)) {
-					Logger.trace("Connecting to %s %s %s %s [%s]".formatted(station.getStationCode(), station.getNetworkCode(), station.getChannelName(), station.getLocationCode(), seedlinkNetwork.getName()));
-					try {
-						reader.selectData(station.getNetworkCode(), station.getStationCode(), List.of("%s%s".formatted(station.getLocationCode(),
-								station.getChannelName())));
+			for (AbstractStation station : chunk) {
+				Logger.trace("Connecting to %s %s %s %s [%s]".formatted(station.getStationCode(), station.getNetworkCode(), station.getChannelName(), station.getLocationCode(), seedlinkNetwork.getName()));
+				try {
+					reader.selectData(station.getNetworkCode(), station.getStationCode(), List.of("%s%s".formatted(station.getLocationCode(),
+							station.getChannelName())));
+					chunkConnected++;
+					synchronized (seedlinkNetwork) {
 						seedlinkNetwork.connectedStations++;
-					}catch(SeedlinkException seedlinkException){
-						Logger.warn("Unable to connect to %s %s %s %s [%s]!".formatted(station.getStationCode(), station.getNetworkCode(), station.getChannelName(), station.getLocationCode(), seedlinkNetwork.getName()));
-						errors++;
-						if(errors > seedlinkNetwork.selectedStations * 0.1){
-							Logger.warn("Too many errors in seedlink network %s, resetting!".formatted(seedlinkNetwork.getName()));
-							throw seedlinkException;
-						}
+					}
+				}catch(SeedlinkException seedlinkException){
+					Logger.warn("Unable to connect to %s %s %s %s [%s]!".formatted(station.getStationCode(), station.getNetworkCode(), station.getChannelName(), station.getLocationCode(), seedlinkNetwork.getName()));
+					errors++;
+					if(errors > chunk.size() * 0.1){
+						Logger.warn("Too many errors in seedlink network %s, resetting!".formatted(seedlinkNetwork.getName()));
+						throw seedlinkException;
 					}
 				}
 			}
 
-			if(seedlinkNetwork.connectedStations == 0){
+			if(chunkConnected == 0){
 				Logger.info("No stations connected to "+seedlinkNetwork.getName());
-				seedlinkNetwork.status = SeedlinkStatus.DISCONNECTED;
+				var active = activeConnections.get(seedlinkNetwork);
+				if (active == null || active.decrementAndGet() <= 0) {
+					seedlinkNetwork.status = SeedlinkStatus.DISCONNECTED;
+				}
 				return;
 			}
 
@@ -142,11 +190,19 @@ public class SeedlinkNetworksReader {
 				}
 				activeReaders.remove(reader);
 			}
+			if (chunkConnected > 0) {
+				synchronized (seedlinkNetwork) {
+					seedlinkNetwork.connectedStations -= chunkConnected;
+				}
+			}
 		}
 
-		seedlinkNetwork.status = SeedlinkStatus.DISCONNECTED;
-		seedlinkNetwork.connectedStations = 0;
-		Logger.warn("%s Disconnected, Reconnecting after %d seconds...".formatted(seedlinkNetwork.getName(), reconnectDelay));
+		// only the last connection of this network to die flips it to DISCONNECTED
+		var active = activeConnections.get(seedlinkNetwork);
+		if (active == null || active.decrementAndGet() <= 0) {
+			seedlinkNetwork.status = SeedlinkStatus.DISCONNECTED;
+		}
+		Logger.warn("A connection to %s died, reconnecting it after %d seconds...".formatted(seedlinkNetwork.getName(), reconnectDelay));
 
 		try {
 			Thread.sleep(reconnectDelay * 1000L);
@@ -158,8 +214,14 @@ public class SeedlinkNetworksReader {
 			return;
 		}
 
+		if (active != null) {
+			active.incrementAndGet();
+		}
+		if (seedlinkNetwork.status == SeedlinkStatus.DISCONNECTED) {
+			seedlinkNetwork.status = SeedlinkStatus.CONNECTING;
+		}
 		int finalReconnectDelay = reconnectDelay;
-		seedlinkReaderService.submit(() -> runSeedlinkThread(seedlinkNetwork, finalReconnectDelay));
+		seedlinkReaderService.submit(() -> runSeedlinkThread(seedlinkNetwork, chunk, finalReconnectDelay));
 	}
 
 	private void newPacket(DataRecord dr) {
