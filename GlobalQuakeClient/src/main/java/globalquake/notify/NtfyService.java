@@ -48,6 +48,7 @@ public class NtfyService {
     private final NtfyConfig config;
     private final HttpClient httpClient;
     private final ScheduledExecutorService tickService;
+    private String endpoint;
 
     // fingerprint -> tracker; guarded by `lock`
     private final Map<String, QuakeTracker> trackers = new LinkedHashMap<>();
@@ -65,8 +66,15 @@ public class NtfyService {
             return;
         }
 
-        Logger.info("ntfy notifications enabled → %s/%s (%d zone(s))".formatted(config.serverUrl, config.topic, config.zones.size()));
-        this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        // Normalise so a trailing slash on serverUrl (or a leading slash on topic) can't produce a
+        // "https://ntfy.sh//topic" URL — ntfy answers that with a 307 redirect the client would
+        // otherwise drop. followRedirects is belt-and-suspenders for self-hosted setups.
+        this.endpoint = config.serverUrl.replaceAll("/+$", "") + "/" + config.topic.replaceAll("^/+", "");
+        Logger.info("ntfy notifications enabled → %s (%d zone(s))".formatted(endpoint, config.zones.size()));
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
 
         registerListeners();
 
@@ -298,7 +306,7 @@ public class NtfyService {
             default -> config.tagsNearby;
         };
 
-        String title = "M%.1f — %s".formatted(t.mag, label);
+        String title = "M%.1f - %s".formatted(t.mag, label);
         String body = "%s\nMagnitude %.1f, depth %.0f km\n%.0f km from %s".formatted(
                 t.region == null || t.region.isBlank() ? "Unknown region" : t.region,
                 t.mag, t.depth, t.bestDistKm, t.bestZone);
@@ -314,13 +322,16 @@ public class NtfyService {
 
     private void post(String title, String body, int priority, String tags) {
         try {
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(config.serverUrl + "/" + config.topic))
+            // HTTP header values must be ASCII (java.net.http rejects anything else). The message
+            // BODY is sent as UTF-8 so accented region names etc. survive there; only headers are
+            // sanitised.
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(endpoint))
                     .timeout(Duration.ofSeconds(10))
-                    .header("Title", title)
+                    .header("Title", asciiHeader(title))
                     .header("Priority", String.valueOf(priority))
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
             if (tags != null && !tags.isBlank()) {
-                b.header("Tags", tags);
+                b.header("Tags", asciiHeader(tags));
             }
             if (!config.authToken.isBlank()) {
                 b.header("Authorization", "Bearer " + config.authToken);
@@ -372,6 +383,19 @@ public class NtfyService {
 
     private static String jsonEscape(String s) {
         return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /** HTTP header values must be ASCII; replace anything else (em dashes, accents) with '?'. */
+    private static String asciiHeader(String s) {
+        if (s == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            sb.append(c < 128 ? c : '?');
+        }
+        return sb.toString();
     }
 
     public void destroy() {
