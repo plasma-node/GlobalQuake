@@ -8,6 +8,7 @@ public class SoundsInfo {
 	public boolean warningPlayed;
 	public int lastCountdown = 999;
 	public boolean meets;
+	public boolean imminentPlayed;
 
 	public final long createdAt = System.currentTimeMillis();
 

@@ -68,6 +68,10 @@ public class NtfyConfig {
     public boolean jsonlEnabled = true;
     public long jsonlRetentionMinutes = 30;
 
+    public boolean httpServerEnabled = false;
+    public String httpServerBind = "127.0.0.1";
+    public int httpServerPort = 8090;
+
     public boolean allowSimulated = false;
 
     public static NtfyConfig load() {
@@ -123,6 +127,10 @@ public class NtfyConfig {
 
         jsonlEnabled = Boolean.parseBoolean(p.getProperty("jsonlEnabled", "true"));
         jsonlRetentionMinutes = longProp(p, "jsonlRetentionMinutes", jsonlRetentionMinutes);
+
+        httpServerEnabled = Boolean.parseBoolean(p.getProperty("httpServerEnabled", "false"));
+        httpServerBind = p.getProperty("httpServerBind", httpServerBind).trim();
+        httpServerPort = intProp(p, "httpServerPort", httpServerPort);
 
         allowSimulated = Boolean.parseBoolean(p.getProperty("allowSimulated", "false"));
 
@@ -239,6 +247,13 @@ public class NtfyConfig {
                 # Jarvis / agent feed
                 jsonlEnabled=true
                 jsonlRetentionMinutes=30
+
+                # Local HTTP feed: GET http://<bind>:<port>/nearby returns the JSONL. Loopback only
+                # by design — for remote/HTTPS access put a reverse proxy in front. Works even if
+                # push notifications above are disabled.
+                httpServerEnabled=false
+                httpServerBind=127.0.0.1
+                httpServerPort=8090
 
                 # Set true ONLY to test with Playground-mode (simulated) quakes
                 allowSimulated=false

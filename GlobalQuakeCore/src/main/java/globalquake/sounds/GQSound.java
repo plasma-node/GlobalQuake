@@ -2,6 +2,7 @@ package globalquake.sounds;
 
 import globalquake.core.exception.FatalIOException;
 
+import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Clip;
@@ -65,6 +66,10 @@ public class GQSound {
                 it has at least MMI VI estimated intensity on land.
                 This audio file is BLANK at default since this alarm sound has not yet been added!""");
 
+        descriptions.put("shaking_imminent.mp3", """
+                Triggered once when STRONG shaking is expected at your home location and the S wave is
+                within 10 seconds of arriving. A last-moment "take cover" cue.""");
+
         descriptions.put("countdown.wav", "Countdown of the last 10 seconds before S waves arrives at your home location\n" +
                 "if shaking is expected there.");
 
@@ -96,6 +101,24 @@ public class GQSound {
 
             AudioInputStream audioIn = AudioSystem.getAudioInputStream(
                     new BufferedInputStream(audioInStream));
+
+            // Compressed formats (e.g. MP3 via the bundled mp3spi/jlayer SPI) decode to a non-PCM
+            // AudioInputStream that Clip cannot open directly — transcode to PCM_SIGNED first. WAV/PCM
+            // passes straight through. Lets users drop an .mp3 in without converting to WAV.
+            AudioFormat base = audioIn.getFormat();
+            if (base.getEncoding() != AudioFormat.Encoding.PCM_SIGNED
+                    && base.getEncoding() != AudioFormat.Encoding.PCM_UNSIGNED) {
+                AudioFormat pcm = new AudioFormat(
+                        AudioFormat.Encoding.PCM_SIGNED,
+                        base.getSampleRate(),
+                        16,
+                        base.getChannels(),
+                        base.getChannels() * 2,
+                        base.getSampleRate(),
+                        false);
+                audioIn = AudioSystem.getAudioInputStream(pcm, audioIn);
+            }
+
             Clip clip = AudioSystem.getClip();
             clip.open(audioIn);
             this.clip = clip;

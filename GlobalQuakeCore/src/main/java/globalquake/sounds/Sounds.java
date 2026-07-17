@@ -27,6 +27,7 @@ public class Sounds {
 	public static final GQSound felt = new GQSound("felt.wav");
 	public static final GQSound eew_warning = new GQSound("eew_warning.wav");
 	public static final GQSound felt_strong = new GQSound("felt_strong.wav");
+	public static final GQSound shaking_imminent = new GQSound("shaking_imminent.mp3");
 	public static final GQSound countdown = new GQSound("countdown.wav");
 	public static final GQSound countdown2 = new GQSound("countdown.wav");
 	public static final GQSound update = new GQSound("update.wav");
@@ -43,6 +44,7 @@ public class Sounds {
 			intensify,
 			felt,
 			felt_strong,
+			shaking_imminent,
 			eew_warning,
 			countdown,
 			countdown2, // workaround
@@ -59,6 +61,7 @@ public class Sounds {
 			intensify,
 			felt,
 			felt_strong,
+			shaking_imminent,
 			eew_warning,
 			countdown,
 	};

@@ -11,7 +11,9 @@ import globalquake.core.events.specific.QuakeCreateEvent;
 import globalquake.core.events.specific.QuakeRemoveEvent;
 import globalquake.core.events.specific.QuakeUpdateEvent;
 import globalquake.core.geo.taup.TauPTravelTimeCalculator;
+import globalquake.core.intensity.IntensityScale;
 import globalquake.core.intensity.IntensityScales;
+import globalquake.core.intensity.Level;
 import globalquake.events.GlobalQuakeLocalEventListener;
 import globalquake.events.specific.AlertIssuedEvent;
 import globalquake.utils.GeoUtils;
@@ -49,6 +51,7 @@ public class NtfyService {
     private final NtfyConfig config;
     private final HttpClient httpClient;
     private final ScheduledExecutorService tickService;
+    private final LocalStatusServer statusServer;
     private String endpoint;
 
     // fingerprint -> tracker; guarded by `lock`
@@ -60,27 +63,41 @@ public class NtfyService {
     public NtfyService() {
         this.config = NtfyConfig.load();
 
-        if (!config.enabled) {
+        // The tracker/tick machinery (and thus the JSONL feed + local status server) runs whenever
+        // EITHER push notifications OR the status server is enabled — you can have the local feed
+        // without pushing to your phone.
+        boolean active = config.enabled || config.httpServerEnabled;
+        if (!active) {
             Logger.info("ntfy notifications disabled");
             this.httpClient = null;
             this.tickService = null;
+            this.statusServer = null;
             return;
         }
 
-        // Normalise so a trailing slash on serverUrl (or a leading slash on topic) can't produce a
-        // "https://ntfy.sh//topic" URL — ntfy answers that with a 307 redirect the client would
-        // otherwise drop. followRedirects is belt-and-suspenders for self-hosted setups.
-        this.endpoint = config.serverUrl.replaceAll("/+$", "") + "/" + config.topic.replaceAll("^/+", "");
-        Logger.info("ntfy notifications enabled → %s (%d zone(s))".formatted(endpoint, config.zones.size()));
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
+        if (config.enabled) {
+            // Normalise so a trailing slash on serverUrl (or a leading slash on topic) can't produce
+            // a "https://ntfy.sh//topic" URL — ntfy answers that with a 307 redirect the client would
+            // otherwise drop. followRedirects is belt-and-suspenders for self-hosted setups.
+            this.endpoint = config.serverUrl.replaceAll("/+$", "") + "/" + config.topic.replaceAll("^/+", "");
+            Logger.info("ntfy notifications enabled → %s (%d zone(s))".formatted(endpoint, config.zones.size()));
+            this.httpClient = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .build();
+        } else {
+            Logger.info("ntfy push disabled; local status/JSONL feed active");
+            this.httpClient = null;
+        }
 
         registerListeners();
 
         this.tickService = Executors.newSingleThreadScheduledExecutor();
         this.tickService.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.SECONDS);
+
+        this.statusServer = config.httpServerEnabled
+                ? LocalStatusServer.start(config.httpServerBind, config.httpServerPort, new File(GlobalQuake.mainFolder, "nearby_quakes.jsonl"))
+                : null;
     }
 
     private boolean ignoreSource() {
@@ -203,7 +220,9 @@ public class NtfyService {
             synchronized (lock) {
                 for (QuakeTracker t : trackers.values()) {
                     t.currentTier = computeTier(t, thFelt, thStrong);
-                    processSends(t, now);
+                    if (config.enabled) {
+                        processSends(t, now);
+                    }
                 }
                 trackers.values().removeIf(t ->
                         (t.removedAt > 0 || t.archived) && now - Math.max(t.updatedAt, t.removedAt) >= retentionMs);
@@ -343,28 +362,42 @@ public class NtfyService {
             default -> config.tagsNearby;
         };
 
+        double angle = TauPTravelTimeCalculator.toAngle(t.bestDistKm);
+        double pTravel = TauPTravelTimeCalculator.getPWaveTravelTime(t.depth, angle);
+        double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(t.depth, angle);
+        double age = (GlobalQuake.instance.currentTimeMillis() - t.origin) / 1000.0;
+
         String title = "M%.1f - %s".formatted(t.mag, label);
         StringBuilder body = new StringBuilder();
+        if (sTravel >= 0) {
+            body.append("ETA ").append(formatEta(sTravel - age)).append('\n'); // time until shaking (S wave)
+        }
+        // Expected shaking intensity at the best zone, on the user's selected scale (MMI/Shindo).
+        IntensityScale scale = IntensityScales.getIntensityScale();
+        Level level = scale.getLevel(t.bestPga);
+        if (level != null) {
+            body.append("Est. intensity %s %s\n".formatted(level.getFullName(), scale.getNameShort()));
+        }
         body.append(t.region == null || t.region.isBlank() ? "Unknown region" : t.region).append('\n');
         body.append("Magnitude %.1f, depth %.0f km\n".formatted(t.mag, t.depth));
-        body.append("%.0f km from %s".formatted(t.bestDistKm, t.bestZone));
-        String eta = etaLine(t);
-        if (!eta.isEmpty()) {
-            body.append('\n').append(eta);
+        body.append("%.0f mi from %s".formatted(kmToMiles(t.bestDistKm), t.bestZone));
+        if (pTravel >= 0 || sTravel >= 0) {
+            body.append('\n').append("P wave %s, S wave %s".formatted(arrivalText(pTravel, age), arrivalText(sTravel, age)));
         }
         post(title, body.toString(), priority, tags);
     }
 
-    /** "P wave in 12s, S wave in 21s" for the best zone, or "" if travel times are unavailable. */
-    private String etaLine(QuakeTracker t) {
-        double angle = TauPTravelTimeCalculator.toAngle(t.bestDistKm);
-        double pTravel = TauPTravelTimeCalculator.getPWaveTravelTime(t.depth, angle);
-        double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(t.depth, angle);
-        if (pTravel < 0 && sTravel < 0) {
-            return "";
+    /** Compact ETA for the body header: at most two digits — "Ns" under 100s, else floored to "Nm". */
+    private static String formatEta(double etaSeconds) {
+        long s = (long) Math.floor(etaSeconds);
+        if (s <= 0) {
+            return "now";
         }
-        double age = (GlobalQuake.instance.currentTimeMillis() - t.origin) / 1000.0;
-        return "P wave %s, S wave %s".formatted(arrivalText(pTravel, age), arrivalText(sTravel, age));
+        return s <= 99 ? s + "s" : (s / 60) + "m";
+    }
+
+    private static double kmToMiles(double km) {
+        return km * 0.621371;
     }
 
     private static String arrivalText(double travel, double age) {
@@ -419,9 +452,9 @@ public class NtfyService {
                 continue;
             }
             sb.append(String.format(Locale.ROOT,
-                    "{\"uuid\":\"%s\",\"fingerprint\":\"%s\",\"origin\":%d,\"lat\":%.4f,\"lon\":%.4f,\"depth\":%.1f,\"mag\":%.2f,\"zone\":\"%s\",\"distKm\":%.1f,\"pga\":%.4f,\"tier\":\"%s\",\"updatedAt\":%d}%n",
+                    "{\"uuid\":\"%s\",\"fingerprint\":\"%s\",\"origin\":%d,\"lat\":%.4f,\"lon\":%.4f,\"depth\":%.1f,\"mag\":%.2f,\"zone\":\"%s\",\"distMi\":%.1f,\"pga\":%.4f,\"tier\":\"%s\",\"updatedAt\":%d}%n",
                     t.currentUuid, t.fingerprint, t.origin, t.lat, t.lon, t.depth, t.mag,
-                    jsonEscape(t.bestZone), t.bestDistKm, t.bestPga, t.currentTier, t.updatedAt));
+                    jsonEscape(t.bestZone), kmToMiles(t.bestDistKm), t.bestPga, t.currentTier, t.updatedAt));
         }
         String content = sb.toString();
         if (content.equals(lastJsonl)) {
@@ -463,6 +496,9 @@ public class NtfyService {
     public void destroy() {
         if (tickService != null) {
             GlobalQuake.instance.stopService(tickService);
+        }
+        if (statusServer != null) {
+            statusServer.stop();
         }
     }
 }

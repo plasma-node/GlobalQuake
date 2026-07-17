@@ -32,7 +32,7 @@ public class SoundsService {
     private final ScheduledExecutorService soundCheckService;
 
     private static void play(GQSound sound) {
-        if (strongShakingSoundOnly && sound != Sounds.felt_strong) {
+        if (strongShakingSoundOnly && sound != Sounds.felt_strong && sound != Sounds.shaking_imminent) {
             return;
         }
         Sounds.playSound(sound);
@@ -146,6 +146,20 @@ public class SoundsService {
                     play(Sounds.felt_strong);
                 }
                 info.maxPGAHome = pgaHome;
+            }
+
+            // Strong-shaking imminent cue (client-side EEW): play once when STRONG shaking is expected
+            // at home AND the S wave is within 10 seconds of arriving.
+            if (!info.imminentPlayed) {
+                double threshold_felt_strong = IntensityScales.INTENSITY_SCALES[Settings.strongShakingLevelScale].getLevels().get(Settings.strongShakingLevelIndex).getPga();
+                if (info.maxPGAHome >= threshold_felt_strong) {
+                    double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(quake.getDepth(), TauPTravelTimeCalculator.toAngle(distGCD));
+                    double age = (GlobalQuake.instance.currentTimeMillis() - quake.getOrigin()) / 1000.0;
+                    if (sTravel >= 0 && sTravel - age <= 10) {
+                        play(Sounds.shaking_imminent);
+                        info.imminentPlayed = true;
+                    }
+                }
             }
 
 
