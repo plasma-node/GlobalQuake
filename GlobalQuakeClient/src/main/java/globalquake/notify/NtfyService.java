@@ -10,6 +10,7 @@ import globalquake.core.events.specific.QuakeArchiveEvent;
 import globalquake.core.events.specific.QuakeCreateEvent;
 import globalquake.core.events.specific.QuakeRemoveEvent;
 import globalquake.core.events.specific.QuakeUpdateEvent;
+import globalquake.core.geo.taup.TauPTravelTimeCalculator;
 import globalquake.core.intensity.IntensityScales;
 import globalquake.events.GlobalQuakeLocalEventListener;
 import globalquake.events.specific.AlertIssuedEvent;
@@ -216,8 +217,9 @@ public class NtfyService {
     }
 
     private NotifyTier computeTier(QuakeTracker t, double thFelt, double thStrong) {
+        boolean magOkForNearby = t.mag >= config.nearbyMinMagnitude;
         NotifyTier bestTier = NotifyTier.NONE;
-        String bestZone = "";
+        NtfyConfig.Zone bestZone = null;
         double bestDist = 0, bestPga = 0;
 
         for (NtfyConfig.Zone z : config.zones) {
@@ -226,7 +228,7 @@ public class NtfyService {
             double pga = GeoUtils.pgaFunction(t.mag, distGEO, t.depth);
 
             NotifyTier zt = NotifyTier.NONE;
-            if (distKm <= z.radiusKm()) {
+            if (distKm <= z.radiusKm() && magOkForNearby) {
                 zt = NotifyTier.NEARBY;
             }
             if (pga >= thFelt) {
@@ -238,16 +240,22 @@ public class NtfyService {
 
             if (zt.ordinal() > bestTier.ordinal() || (zt == bestTier && pga > bestPga)) {
                 bestTier = zt;
-                bestZone = z.name();
+                bestZone = z;
                 bestDist = distKm;
                 bestPga = pga;
             }
         }
 
-        t.bestZone = bestZone.isEmpty() ? (config.zones.isEmpty() ? "home" : config.zones.get(0).name()) : bestZone;
-        t.bestDistKm = bestDist;
+        NtfyConfig.Zone info = bestZone != null ? bestZone : (config.zones.isEmpty() ? null : config.zones.get(0));
+        t.bestZone = info != null ? info.name() : "home";
+        t.bestZoneLat = info != null ? info.lat() : Settings.homeLat;
+        t.bestZoneLon = info != null ? info.lon() : Settings.homeLon;
+        t.bestDistKm = bestZone != null ? bestDist
+                : (info != null ? GeoUtils.greatCircleDistance(t.lat, t.lon, info.lat(), info.lon()) : 0);
         t.bestPga = bestPga;
-        return NotifyTier.max(bestTier, t.floorTier);
+
+        // The warning-driven "nearby" floor still respects the nearby magnitude gate.
+        return NotifyTier.max(bestTier, magOkForNearby ? t.floorTier : NotifyTier.NONE);
     }
 
     private void processSends(QuakeTracker t, long now) {
@@ -259,6 +267,8 @@ public class NtfyService {
             }
             return;
         }
+
+        checkImminent(t, now);
 
         NotifyTier tier = t.currentTier;
         if (tier == NotifyTier.NONE) {
@@ -289,28 +299,80 @@ public class NtfyService {
         }
     }
 
+    /**
+     * The max-priority "shaking imminent" alert — fires once per debounce window when the S wave is
+     * within imminentSeconds of the best zone and the expected shaking there is at least
+     * imminentMinTier. Independent of the normal first-notify delay (this is EEW — it must be fast).
+     */
+    private void checkImminent(QuakeTracker t, long now) {
+        if (!config.imminentEnabled || !t.currentTier.atLeast(config.imminentMinTier)) {
+            return;
+        }
+        double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(t.depth, TauPTravelTimeCalculator.toAngle(t.bestDistKm));
+        if (sTravel < 0) {
+            return;
+        }
+        double etaS = sTravel - (GlobalQuake.instance.currentTimeMillis() - t.origin) / 1000.0;
+        if (etaS > config.imminentSeconds || etaS < -5) {
+            return; // not imminent yet, or the S wave already swept past
+        }
+        if (now - t.lastImminentAt < config.imminentDebounceMs) {
+            return; // debounced
+        }
+        t.lastImminentAt = now;
+        send(t, NotifyTier.IMMINENT);
+    }
+
     private void send(QuakeTracker t, NotifyTier tier) {
         String label = switch (tier) {
+            case IMMINENT -> "Shaking imminent";
             case STRONG -> "Strong shaking expected";
             case SHAKING -> "Shaking expected";
             default -> "Earthquake nearby";
         };
         int priority = switch (tier) {
+            case IMMINENT -> config.priorityImminent;
             case STRONG -> config.priorityStrong;
             case SHAKING -> config.priorityShaking;
             default -> config.priorityNearby;
         };
         String tags = switch (tier) {
+            case IMMINENT -> config.tagsImminent;
             case STRONG -> config.tagsStrong;
             case SHAKING -> config.tagsShaking;
             default -> config.tagsNearby;
         };
 
         String title = "M%.1f - %s".formatted(t.mag, label);
-        String body = "%s\nMagnitude %.1f, depth %.0f km\n%.0f km from %s".formatted(
-                t.region == null || t.region.isBlank() ? "Unknown region" : t.region,
-                t.mag, t.depth, t.bestDistKm, t.bestZone);
-        post(title, body, priority, tags);
+        StringBuilder body = new StringBuilder();
+        body.append(t.region == null || t.region.isBlank() ? "Unknown region" : t.region).append('\n');
+        body.append("Magnitude %.1f, depth %.0f km\n".formatted(t.mag, t.depth));
+        body.append("%.0f km from %s".formatted(t.bestDistKm, t.bestZone));
+        String eta = etaLine(t);
+        if (!eta.isEmpty()) {
+            body.append('\n').append(eta);
+        }
+        post(title, body.toString(), priority, tags);
+    }
+
+    /** "P wave in 12s, S wave in 21s" for the best zone, or "" if travel times are unavailable. */
+    private String etaLine(QuakeTracker t) {
+        double angle = TauPTravelTimeCalculator.toAngle(t.bestDistKm);
+        double pTravel = TauPTravelTimeCalculator.getPWaveTravelTime(t.depth, angle);
+        double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(t.depth, angle);
+        if (pTravel < 0 && sTravel < 0) {
+            return "";
+        }
+        double age = (GlobalQuake.instance.currentTimeMillis() - t.origin) / 1000.0;
+        return "P wave %s, S wave %s".formatted(arrivalText(pTravel, age), arrivalText(sTravel, age));
+    }
+
+    private static String arrivalText(double travel, double age) {
+        if (travel < 0) {
+            return "n/a";
+        }
+        long eta = Math.round(travel - age);
+        return eta > 0 ? "in " + eta + "s" : "now";
     }
 
     private void sendCancel(QuakeTracker t) {

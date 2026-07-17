@@ -37,13 +37,24 @@ public class NtfyConfig {
     public String authToken = "";
     public final List<Zone> zones = new ArrayList<>();
 
-    public int priorityNearby = 2;
-    public int priorityShaking = 4;
-    public int priorityStrong = 5;
-    public int priorityCancel = 1;
+    public int priorityNearby = 2;   // low
+    public int priorityShaking = 3;  // default
+    public int priorityStrong = 4;   // high
+    public int priorityImminent = 5; // max
+    public int priorityCancel = 1;   // min
     public String tagsNearby = "earthquake";
     public String tagsShaking = "warning";
     public String tagsStrong = "rotating_light";
+    public String tagsImminent = "rotating_light,bangbang";
+
+    public double nearbyMinMagnitude = 2.5;
+
+    // "Shaking imminent" max-priority alert: fires once (per debounce window) when the S wave is
+    // within `imminentSeconds` of a zone AND the shaking there is at least `imminentMinTier`.
+    public boolean imminentEnabled = true;
+    public int imminentSeconds = 10;
+    public long imminentDebounceMs = 60000;
+    public NotifyTier imminentMinTier = NotifyTier.SHAKING;
 
     public long notifyDelayMs = 4000;
     public double renotifyMagDelta = 0.7;
@@ -87,10 +98,19 @@ public class NtfyConfig {
         priorityNearby = intProp(p, "priorityNearby", priorityNearby);
         priorityShaking = intProp(p, "priorityShaking", priorityShaking);
         priorityStrong = intProp(p, "priorityStrong", priorityStrong);
+        priorityImminent = intProp(p, "priorityImminent", priorityImminent);
         priorityCancel = intProp(p, "priorityCancel", priorityCancel);
         tagsNearby = p.getProperty("tagsNearby", tagsNearby).trim();
         tagsShaking = p.getProperty("tagsShaking", tagsShaking).trim();
         tagsStrong = p.getProperty("tagsStrong", tagsStrong).trim();
+        tagsImminent = p.getProperty("tagsImminent", tagsImminent).trim();
+
+        nearbyMinMagnitude = doubleProp(p, "nearbyMinMagnitude", nearbyMinMagnitude);
+
+        imminentEnabled = Boolean.parseBoolean(p.getProperty("imminentEnabled", "true"));
+        imminentSeconds = intProp(p, "imminentSeconds", imminentSeconds);
+        imminentDebounceMs = longProp(p, "imminentDebounceMs", imminentDebounceMs);
+        imminentMinTier = NotifyTier.parse(p.getProperty("imminentMinTier"), imminentMinTier);
 
         notifyDelayMs = longProp(p, "notifyDelayMs", notifyDelayMs);
         renotifyMagDelta = doubleProp(p, "renotifyMagDelta", renotifyMagDelta);
@@ -182,13 +202,28 @@ public class NtfyConfig {
                 #zones=home;cabin:35.20:-120.60:150
 
                 # ntfy priority per tier (1=min .. 5=max/urgent)
+                # nearby=low, shaking=default, strong=high, imminent=max(reserved for "about to hit")
                 priorityNearby=2
-                priorityShaking=4
-                priorityStrong=5
+                priorityShaking=3
+                priorityStrong=4
+                priorityImminent=5
                 priorityCancel=1
                 tagsNearby=earthquake
                 tagsShaking=warning
                 tagsStrong=rotating_light
+                tagsImminent=rotating_light,bangbang
+
+                # A low-priority "nearby" alert is only sent for quakes at least this magnitude.
+                nearbyMinMagnitude=2.5
+
+                # "Shaking imminent" = the max-priority alert. Fires once (per debounce) when the S
+                # wave is within imminentSeconds of a zone AND the shaking there reaches at least
+                # imminentMinTier (SHAKING or STRONG). Set imminentMinTier=STRONG to only get it for
+                # strong shaking.
+                imminentEnabled=true
+                imminentSeconds=10
+                imminentDebounceMs=60000
+                imminentMinTier=SHAKING
 
                 # Debounce / dedupe
                 notifyDelayMs=4000

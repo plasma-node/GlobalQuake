@@ -23,10 +23,13 @@ public class QuakeTracker {
     NotifyTier floorTier = NotifyTier.NONE;   // raised by AlertManager warnings (NEARBY)
     NotifyTier currentTier = NotifyTier.NONE; // recomputed each tick
 
-    // best-affected zone this tick, for message + JSONL
+    // best-affected zone this tick, for message + JSONL + ETA
     String bestZone = "";
+    double bestZoneLat, bestZoneLon;
     double bestDistKm;
     double bestPga;
+
+    long lastImminentAt; // wall clock; debounces the max-priority imminent alert
 
     boolean notified;
     NotifyTier lastNotifiedTier = NotifyTier.NONE;
