@@ -5,19 +5,15 @@ import globalquake.core.database.StationDatabaseManager;
 import globalquake.core.database.StationSource;
 import globalquake.core.earthquake.GQHypocs;
 import globalquake.core.exception.FatalIOException;
-import globalquake.core.exception.RuntimeApplicationException;
-import globalquake.core.geo.taup.TauPTravelTimeCalculator;
-import globalquake.core.regions.Regions;
 import globalquake.core.training.EarthquakeAnalysisTraining;
-import globalquake.intensity.ShakeMap;
 import globalquake.client.GlobalQuakeLocal;
+import globalquake.main.ClientBootstrap;
 import globalquake.main.Main;
+import globalquake.main.StationAutoSelector;
 import globalquake.playground.GlobalQuakePlayground;
-import globalquake.sounds.Sounds;
 import globalquake.ui.GQFrame;
 import globalquake.ui.database.DatabaseMonitorFrame;
 import globalquake.ui.settings.SettingsFrame;
-import globalquake.utils.Scale;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -75,34 +71,13 @@ public class MainFrame extends GQFrame {
     private static int phase = 0;
 
     private void initAll() throws Exception {
-        getProgressBar().setString("Loading regions...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        Regions.init();
-        getProgressBar().setString("Loading scales...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        Scale.load();
-        getProgressBar().setString("Loading shakemap...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        ShakeMap.init();
-        getProgressBar().setString("Loading sounds...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        try {
-            //Sound may fail to load for a variety of reasons. If it does, this method disables sound.
-            Sounds.load();
-        } catch (Exception e) {
-            RuntimeApplicationException error = new RuntimeApplicationException("Failed to load sounds. Sound will be disabled", e);
-            Main.getErrorHandler().handleWarning(error);
-        }
-        getProgressBar().setString("Loading travel table...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        TauPTravelTimeCalculator.init();
-
-        getProgressBar().setString("Trying to load CUDA library...");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
-        GQHypocs.load();
-
-        getProgressBar().setString("Done");
-        getProgressBar().setValue((int) ((phase++ / PHASES) * 100.0));
+        ClientBootstrap.loadAssets((status, value) -> {
+            getProgressBar().setString(status);
+            getProgressBar().setValue(value);
+        });
+        // finishInit() continues the shared phase counter where the original inline
+        // initAll() left it (7 progress steps), so keep that invariant after extraction
+        phase = 7;
     }
 
     private JPanel createMainPanel() {
@@ -211,6 +186,9 @@ public class MainFrame extends GQFrame {
                 () -> {
                     updateProgressBar("Checking Seedlink Networks...", (int) ((phase++ / (PHASES + 3)) * 100.0));
                     databaseManager.runAvailabilityCheck(databaseManager.getStationDatabase().getSeedlinkNetworks(), () -> {
+                        if (Main.autoSelect) {
+                            StationAutoSelector.selectAllAvailable(databaseManager);
+                        }
                         updateProgressBar("Saving...", (int) ((phase++ / (PHASES + 4)) * 100.0));
 
                         try {

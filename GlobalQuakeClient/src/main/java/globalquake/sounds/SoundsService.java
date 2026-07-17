@@ -21,8 +21,22 @@ import java.util.concurrent.TimeUnit;
 
 public class SoundsService {
 
+    /**
+     * When true (set by the {@code --sound-strong-only} CLI flag), every audible cue except the
+     * strong-shaking alert ({@link Sounds#felt_strong}) is suppressed. Intended for a monitoring
+     * box that should stay silent unless serious shaking is expected at home.
+     */
+    public static volatile boolean strongShakingSoundOnly = false;
+
     private final Map<Cluster, SoundsInfo> clusterSoundsInfo = new HashMap<>();
     private final ScheduledExecutorService soundCheckService;
+
+    private static void play(GQSound sound) {
+        if (strongShakingSoundOnly && sound != Sounds.felt_strong) {
+            return;
+        }
+        Sounds.playSound(sound);
+    }
 
     public SoundsService(){
         soundCheckService = Executors.newSingleThreadScheduledExecutor();
@@ -32,7 +46,7 @@ public class SoundsService {
             @Override
             public void onQuakeCreate(QuakeCreateEvent event) {
                 if(SoundsService.this.canPing(event.earthquake())) {
-                    Sounds.playSound(Sounds.found);
+                    play(Sounds.found);
                     event.earthquake().foundPlayed = true;
                 }
             }
@@ -41,10 +55,10 @@ public class SoundsService {
             public void onQuakeUpdate(QuakeUpdateEvent event) {
                 if(SoundsService.this.canPing(event.earthquake())) {
                     if(!event.earthquake().foundPlayed){
-                        Sounds.playSound(Sounds.found);
+                        play(Sounds.found);
                         event.earthquake().foundPlayed = true;
                     } else {
-                        Sounds.playSound(Sounds.update);
+                        play(Sounds.update);
                     }
                 }
             }
@@ -82,19 +96,19 @@ public class SoundsService {
         int level = cluster.getLevel();
         if (level > info.maxLevel && (canPing(cluster) || canPing(cluster.getEarthquake()))) {
             if(info.maxLevel < 0){
-                Sounds.playSound(Sounds.level_0);
+                play(Sounds.level_0);
             }
             if (level >= 1 && info.maxLevel < 1) {
-                Sounds.playSound(Sounds.level_1);
+                play(Sounds.level_1);
             }
             if (level >= 2 && info.maxLevel < 2) {
-                Sounds.playSound(Sounds.level_2);
+                play(Sounds.level_2);
             }
             if (level >= 3 && info.maxLevel < 3) {
-                Sounds.playSound(Sounds.level_3);
+                play(Sounds.level_3);
             }
             if (level >= 4 && info.maxLevel < 4) {
-                Sounds.playSound(Sounds.level_4);
+                play(Sounds.level_4);
             }
             info.maxLevel = level;
         }
@@ -104,7 +118,7 @@ public class SoundsService {
         if (quake != null) {
             boolean meets = AlertManager.meetsConditions(quake, true);
             if (meets && !info.meets) {
-                Sounds.playSound(Sounds.intensify);
+                play(Sounds.intensify);
                 info.meets = true;
             }
             double pga = GeoUtils.getMaxPGA(quake.getLat(), quake.getLon(), quake.getDepth(), quake.getMag());
@@ -112,7 +126,7 @@ public class SoundsService {
                 info.maxPGA = pga;
                 double threshold_eew = IntensityScales.INTENSITY_SCALES[Settings.eewScale].getLevels().get(Settings.eewLevelIndex).getPga();
                 if (info.maxPGA >= threshold_eew && !info.warningPlayed && level >= Settings.eewClusterLevel) {
-                    Sounds.playSound(Sounds.eew_warning);
+                    play(Sounds.eew_warning);
                     info.warningPlayed = true;
                 }
             }
@@ -126,10 +140,10 @@ public class SoundsService {
                 double threshold_felt = IntensityScales.INTENSITY_SCALES[Settings.shakingLevelScale].getLevels().get(Settings.shakingLevelIndex).getPga();
                 double threshold_felt_strong = IntensityScales.INTENSITY_SCALES[Settings.strongShakingLevelScale].getLevels().get(Settings.strongShakingLevelIndex).getPga();
                 if (pgaHome >= threshold_felt && info.maxPGAHome < threshold_felt) {
-                    Sounds.playSound(Sounds.felt);
+                    play(Sounds.felt);
                 }
                 if (pgaHome >= threshold_felt_strong && info.maxPGAHome < threshold_felt_strong) {
-                    Sounds.playSound(Sounds.felt_strong);
+                    play(Sounds.felt_strong);
                 }
                 info.maxPGAHome = pgaHome;
             }
@@ -146,7 +160,7 @@ public class SoundsService {
                 if (secondsS < info.lastCountdown && secondsS <= 10) {
                     info.lastCountdown = secondsS;
                     // little workaround
-                    Sounds.playSound(secondsS % 2 == 0 ? Sounds.countdown2 : Sounds.countdown);
+                    play(secondsS % 2 == 0 ? Sounds.countdown2 : Sounds.countdown);
                 }
             }
         }

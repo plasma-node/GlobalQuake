@@ -1,0 +1,20 @@
+[Unit]
+Description=GlobalQuake headless earthquake monitor (client)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=globalquake
+# All runtime state (.GlobalQuakeData: settings, station database, ntfy.properties,
+# nearby_quakes.jsonl) is created relative to this directory.
+WorkingDirectory=/opt/globalquake
+ExecStart=/usr/bin/java -Djava.awt.headless=true -Xmx6G -jar /opt/globalquake/GlobalQuakeClient.jar --headless --autoselect --nosound
+Restart=on-failure
+RestartSec=30
+# Give the archive-on-shutdown hook time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

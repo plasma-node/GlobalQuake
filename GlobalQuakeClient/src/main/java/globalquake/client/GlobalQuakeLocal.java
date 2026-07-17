@@ -9,6 +9,7 @@ import globalquake.core.station.GlobalStationManager;
 import globalquake.events.GlobalQuakeLocalEventHandler;
 import globalquake.intensity.ShakemapService;
 import globalquake.main.Main;
+import globalquake.notify.NtfyService;
 import globalquake.sounds.SoundsService;
 import globalquake.ui.globalquake.GlobalQuakeFrame;
 import org.tinylog.Logger;
@@ -27,6 +28,7 @@ public class GlobalQuakeLocal extends GlobalQuake {
     private final ShakemapService shakemapService;
     @SuppressWarnings("unused")
     private final SoundsService soundsService;
+    private final NtfyService ntfyService;
 
     protected GlobalQuakeFrame globalQuakeFrame;
 
@@ -38,6 +40,7 @@ public class GlobalQuakeLocal extends GlobalQuake {
         this.alertManager = new AlertManager();
         this.shakemapService = new ShakemapService();
         this.soundsService = new SoundsService();
+        this.ntfyService = new NtfyService();
     }
 
     public GlobalQuakeLocal(StationDatabaseManager stationDatabaseManager) {
@@ -49,6 +52,7 @@ public class GlobalQuakeLocal extends GlobalQuake {
         this.alertManager = new AlertManager();
         this.shakemapService = new ShakemapService();
         this.soundsService = new SoundsService();
+        this.ntfyService = new NtfyService();
     }
 
     public GlobalQuakeLocal(StationDatabaseManager stationDatabaseManager, GlobalStationManager globalStationManager) {
@@ -60,6 +64,7 @@ public class GlobalQuakeLocal extends GlobalQuake {
         this.alertManager = new AlertManager();
         this.shakemapService = new ShakemapService();
         this.soundsService = new SoundsService();
+        this.ntfyService = new NtfyService();
     }
 
     public GlobalQuakeLocal createFrame() {
@@ -95,6 +100,7 @@ public class GlobalQuakeLocal extends GlobalQuake {
         getLocalEventHandler().stopHandler();
         getShakemapService().stop();
         soundsService.destroy();
+        ntfyService.destroy();
     }
 
     public GlobalQuakeLocalEventHandler getLocalEventHandler() {
@@ -114,7 +120,9 @@ public class GlobalQuakeLocal extends GlobalQuake {
         super.clear();
         shakemapService.clear();
         alertManager.clear();
-        getGlobalQuakeFrame().clear();
+        if (globalQuakeFrame != null) { // null in headless mode (createFrame() never called)
+            globalQuakeFrame.clear();
+        }
     }
 
     @Override
