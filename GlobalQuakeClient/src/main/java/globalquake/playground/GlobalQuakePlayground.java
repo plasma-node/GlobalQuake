@@ -9,6 +9,7 @@ import globalquake.core.earthquake.data.Earthquake;
 import globalquake.core.exception.ApplicationErrorHandler;
 import globalquake.core.regions.Regions;
 import globalquake.core.station.GlobalStationManager;
+import globalquake.intensity.ShakeMap;
 import globalquake.main.Main;
 import globalquake.utils.Scale;
 import globalquake.utils.monitorable.MonitorableCopyOnWriteArrayList;
@@ -33,6 +34,10 @@ public class GlobalQuakePlayground extends GlobalQuakeLocal {
         GlobalQuake.prepare(Main.MAIN_FOLDER, new ApplicationErrorHandler(null, false));
         Regions.init();
         Scale.load();
+        // Playground draws shakemaps like the full client (MainFrame/ServerSelectionFrame both do
+        // this); without it ShakeMap.h3 stays null and every shakemap generation NPEs, so quakes
+        // show no shake zones / intensity. See ShakemapService.
+        ShakeMap.init();
 
         new GlobalQuakePlayground();
     }

@@ -36,6 +36,10 @@ public class Event implements Serializable {
     private boolean valid;
 
     public Cluster assignedCluster;
+    // The cluster that released this pick as a misfit (it does not fit that cluster's earthquake).
+    // That cluster must not immediately re-steal the pick, so a distinct nearby/second earthquake can
+    // form from it. Transient, live-analysis-only state (never persisted). See ClusterAnalysis.
+    public transient Cluster rejectedByCluster;
     private int updatesCount;
     public StationReport report;
 

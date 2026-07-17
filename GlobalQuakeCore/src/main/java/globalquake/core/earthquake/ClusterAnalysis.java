@@ -49,6 +49,20 @@ public class ClusterAnalysis {
         return clustersReadLock;
     }
 
+    /**
+     * Master switch for the EXPERIMENTAL multi-quake detection path (release of misfit picks,
+     * newborn-cluster survival, ghost absorption, origin-time & direction merge guards). OFF (0,
+     * the default) preserves the original upstream behaviour exactly: nearby second quakes are
+     * swallowed by the loose merge (README known issue #1), but there are no phantom-quake storms
+     * beyond upstream's own M6+ behaviour (README known issue #2 — playground testing showed both
+     * issues share the coda-retrigger root; see .ai/multi-quake-fix-design.md). Enable by putting
+     * {@code multiQuakeMode=1} in {@code .GlobalQuakeData/hypocs.properties} — playground
+     * experiments only until the coda-ghost problem is solved.
+     */
+    public static boolean multiQuakeMode() {
+        return HypocsSettings.getOrDefaultInt("multiQuakeMode", 0) != 0;
+    }
+
     public void run() {
         clustersWriteLock.lock();
         try {
@@ -56,12 +70,73 @@ public class ClusterAnalysis {
             markSWaves();
             //assignEventsToExistingEarthquakeClusters(); VERY CONTROVERSIAL
             expandExistingClusters();
+            if (multiQuakeMode()) {
+                releaseMisfitEvents();
+            }
             createNewClusters();
+            if (multiQuakeMode()) {
+                absorbGhostClusters();
+            }
             stealEvents();
             mergeClusters();
             updateClusters();
+            logMultiQuakeDebug();
         } finally {
             clustersWriteLock.unlock();
+        }
+    }
+
+    /**
+     * TEMPORARY multi-quake diagnostic instrumentation ([MQ] tag, INFO level so it shows on the
+     * default console). Logging-only, no behaviour change. Prints a per-cycle census of P-picks
+     * (assigned vs unassigned) and per-cluster state, so we can see whether a second nearby quake
+     * actually generates independent picks and where they end up. Remove once the root fix lands.
+     */
+    private void logMultiQuakeDebug() {
+        int pValid = 0, assigned = 0, unassigned = 0, stationsInEvent = 0;
+        for (AbstractStation station : stations) {
+            boolean stEvent = false;
+            for (Event e : station.getAnalysis().getDetectedEvents()) {
+                if (e.isValid() && !e.isSWave() && e.getpWave() > 0) {
+                    pValid++;
+                    if (e.assignedCluster == null) {
+                        unassigned++;
+                    } else {
+                        assigned++;
+                    }
+                }
+                if (e.isValid() && !e.hasEnded()) {
+                    stEvent = true;
+                }
+            }
+            if (stEvent) {
+                stationsInEvent++;
+            }
+        }
+
+        int clusterCount = 0;
+        for (Cluster ignored : clusters) {
+            clusterCount++;
+        }
+
+        if (clusterCount == 0 && unassigned == 0) {
+            return; // idle / nothing interesting — stay quiet
+        }
+
+        Logger.tag("MQ").info("[MQ] cycle: clusters=%d Ppicks=%d assigned=%d unassigned=%d stationsInEvent=%d"
+                .formatted(clusterCount, pValid, assigned, unassigned, stationsInEvent));
+
+        for (Cluster c : clusters) {
+            Earthquake eq = c.getEarthquake();
+            String correct = c.getPreviousHypocenter() == null ? "-" : Integer.toString(c.getPreviousHypocenter().correctEvents);
+            if (eq == null) {
+                Logger.tag("MQ").info("[MQ]   C#%d eq=none assigned=%d correctEv=%s"
+                        .formatted(c.id, c.getAssignedEvents().size(), correct));
+            } else {
+                long ageSec = (GlobalQuake.instance.currentTimeMillis() - eq.getOrigin()) / 1000;
+                Logger.tag("MQ").info("[MQ]   C#%d eq=M%.1f depth=%.0fkm origin=%ds-ago assigned=%d correctEv=%s"
+                        .formatted(c.id, eq.getMag(), eq.getDepth(), ageSec, c.getAssignedEvents().size(), correct));
+            }
         }
     }
 
@@ -123,7 +198,11 @@ public class ClusterAnalysis {
 
             for (AbstractStation station : stations) {
                 for (Event event : station.getAnalysis().getDetectedEvents()) {
-                    if (event.isValid() && event.isSWave() && (!couldBeSArrival(event, cluster.getEarthquake())
+                    // In multi-quake mode the unmark decision must be pure timing
+                    // (considerIntensity=false), or picks S-marked by absorbGhostClusters (which
+                    // ignores the intensity gate) would be unmarked here every cycle and re-fuel
+                    // ghost clusters in an endless loop. Original mode keeps the upstream gated test.
+                    if (event.isValid() && event.isSWave() && (!couldBeSArrival(event, cluster.getEarthquake(), !multiQuakeMode())
                             || couldBeArrival(event, cluster.getEarthquake(), true, false, true))) {
                         event.setAsSWave(false);
                     }
@@ -143,6 +222,69 @@ public class ClusterAnalysis {
         }
     }
 
+
+    /**
+     * Dissolves newborn (earthquake-less) clusters that are actually GHOSTS of an existing quake —
+     * S-wave / coda re-triggers picked as fresh P arrivals. Stations re-trigger when the S wavefront
+     * hits (~tens of seconds after P); those picks are mutually consistent (they ride a real physical
+     * wavefront), so the hypocenter solver would happily locate a phantom "second quake" from them
+     * (observed in playground: phantom origins ~25 s late = the S−P delay, storms of 17 clusters, the
+     * real quake getting eaten). The discriminator is phase-aware and intensity-free: a ghost's picks
+     * fit the quake's S travel-time curve; a genuine doublet's picks fit neither P (offset by the
+     * origin-time gap) nor S (coincides only on one distance ring, never a majority). Dissolving
+     * (rather than merging into the quake) marks S-fitting picks as S-waves so they stop fueling new
+     * ghosts AND stay out of the quake's P solution; the remainder is released with rejection memory.
+     * Runs before mergeClusters() and, critically, before EarthquakeAnalysis.run() in the same tick
+     * (see GlobalQuakeRuntime), so a dissolved ghost can never establish an earthquake.
+     */
+    private void absorbGhostClusters() {
+        List<Cluster> toDissolve = null;
+        for (Cluster cluster : clusters) {
+            if (cluster.getEarthquake() != null) {
+                continue; // established clusters are governed by canMerge's guards
+            }
+            for (Earthquake earthquake : earthquakes) {
+                int pFit = 0, sFit = 0, total = 0;
+                for (Event event : cluster.getAssignedEvents().values()) {
+                    if (!event.isValid() || event.isSWave()) {
+                        continue;
+                    }
+                    total++;
+                    if (couldBeArrival(event, earthquake, false, false, false)) {
+                        pFit++;
+                    } else if (couldBeSArrival(event, earthquake, false)) {
+                        sFit++;
+                    }
+                }
+
+                // majority explained by this quake, and S-like arrivals dominate strict-P stragglers
+                // (a straggler-dominated newborn is left for canMerge to fold back into the quake)
+                if (total == 0 || (pFit + sFit) / (double) total <= MERGE_THRESHOLD || sFit <= pFit) {
+                    continue;
+                }
+
+                for (Event event : cluster.getAssignedEvents().values()) {
+                    if (event.isValid() && !event.isSWave() && couldBeSArrival(event, earthquake, false)) {
+                        event.setAsSWave(true);
+                    }
+                    event.assignedCluster = null;
+                    // the quake may not re-claim the leftovers with its wide window; a strict fit
+                    // still readmits them (see expandPWaves)
+                    event.rejectedByCluster = earthquake.getCluster();
+                }
+                if (toDissolve == null) {
+                    toDissolve = new ArrayList<>();
+                }
+                toDissolve.add(cluster);
+                Logger.tag("MQ").info("[MQ] ghost-DISSOLVE: newborn C#%d (%d picks) explained by M%.1f as sFit=%d pFit=%d -> S-marked & disbanded"
+                        .formatted(cluster.id, total, earthquake.getMag(), sFit, pFit));
+                break;
+            }
+        }
+        if (toDissolve != null) {
+            clusters.removeAll(toDissolve);
+        }
+    }
 
     private void mergeClusters() {
         for (Earthquake earthquake : earthquakes) {
@@ -188,24 +330,69 @@ public class ClusterAnalysis {
     }
 
     private boolean canMerge(Earthquake earthquake, Cluster cluster) {
-        if(cluster.getEarthquake() != null && cluster.getPreviousHypocenter() != null){
+        boolean established = cluster.getEarthquake() != null && cluster.getPreviousHypocenter() != null;
+        if(established){
             int thatCorrect = cluster.getPreviousHypocenter().correctEvents;
             double dist = GeoUtils.greatCircleDistance(earthquake.getLat(), earthquake.getLon(), cluster.getEarthquake().getLat(), cluster.getEarthquake().getLon());
             double maxDist = 6000 / (1 + thatCorrect * 0.2);
             if(dist > maxDist){
                 return false;
             }
+
+            if (multiQuakeMode()) {
+                // Two established earthquakes whose origin TIMES are far apart are distinct events (e.g. a
+                // doublet or an aftershock at the same spot), not a duplicate to be merged away. Without
+                // this, a genuine second quake near the first is deleted purely on spatial overlap.
+                long dtOrigin = Math.abs(earthquake.getOrigin() - cluster.getEarthquake().getOrigin());
+                if(dtOrigin > HypocsSettings.getOrDefaultInt("originTimeMergeSeparationMs", 15000)){
+                    Logger.tag("MQ").info("[MQ] merge-BLOCK (origin-time guard): C#%d dtOrigin=%dms > %dms -> kept separate"
+                            .formatted(cluster.id, dtOrigin, HypocsSettings.getOrDefaultInt("originTimeMergeSeparationMs", 15000)));
+                    return false;
+                }
+
+                // Merge direction must favor the better-constrained solution. mergeClusters() keeps
+                // `earthquake` and destroys `cluster`, in earthquake-list iteration order — without this
+                // guard a young phantom could absorb (and thus delete) the real, well-constrained quake
+                // just by being iterated first. The reverse merge (better one absorbing this cluster)
+                // stays allowed, so consolidation still happens — just never backwards.
+                Cluster ownCluster = earthquake.getCluster();
+                if (ownCluster != null && ownCluster.getPreviousHypocenter() != null
+                        && thatCorrect > ownCluster.getPreviousHypocenter().correctEvents) {
+                    Logger.tag("MQ").info("[MQ] merge-BLOCK (direction guard): M%.1f (correct=%d) may not absorb better-constrained C#%d (correct=%d)"
+                            .formatted(earthquake.getMag(), ownCluster.getPreviousHypocenter().correctEvents, cluster.id, thatCorrect));
+                    return false;
+                }
+            }
         }
         int correct = 0;
         for (Event event : cluster.getAssignedEvents().values()) {
-            if (couldBeArrival(event, earthquake, true, true, true)) {
+            // Multi-quake mode: a newborn cluster (no located earthquake yet) skips the
+            // distance/origin-time guards above, so the fit test below is its ONLY protection from
+            // being swallowed. Judge it with the same STRICT arrival test that releaseMisfitEvents()
+            // uses — the loose ±10s window would re-absorb the very picks that were just released for
+            // failing the strict window (which is why a distinct second quake's newborn cluster used
+            // to be annihilated in the same cycle it formed, and release/merge oscillated every
+            // cycle). Genuine stragglers of this quake still fit strictly and merge back; a distinct
+            // quake's picks survive until the solver gives the cluster its own origin, after which
+            // the guards above apply. Original mode: the loose test for everything (upstream
+            // behaviour — swallows nearby newborns, ghosts and doublets alike).
+            boolean fits = established || !multiQuakeMode()
+                    ? couldBeArrival(event, earthquake, true, true, true)
+                    : couldBeArrival(event, earthquake, false, false, false);
+            if (fits) {
                 correct++;
             }
         }
 
         double pct = correct / (double) cluster.getAssignedEvents().size();
 
-        return pct > MERGE_THRESHOLD;
+        boolean merge = pct > MERGE_THRESHOLD;
+        if (!established) {
+            Logger.tag("MQ").info("[MQ] merge-eval newborn C#%d vs M%.1f: strictFit=%d/%d (%.0f%%) -> %s"
+                    .formatted(cluster.id, earthquake.getMag(), correct, cluster.getAssignedEvents().size(),
+                            pct * 100, merge ? "MERGED into existing quake" : "kept separate"));
+        }
+        return merge;
     }
 
     @SuppressWarnings("unused")
@@ -236,28 +423,52 @@ public class ClusterAnalysis {
 
     }
 
-    @SuppressWarnings("RedundantIfStatement")
     private boolean couldBeSArrival(Event event, Earthquake earthquake){
+        return couldBeSArrival(event, earthquake, true);
+    }
+
+    @SuppressWarnings("RedundantIfStatement")
+    private boolean couldBeSArrival(Event event, Earthquake earthquake, boolean considerIntensity){
         if (!event.isValid() || earthquake == null) {
             return false;
         }
-        long actualTravel = event.getpWave() - earthquake.getOrigin();
 
-        double distGC = GeoUtils.greatCircleDistance(earthquake.getLat(), earthquake.getLon(),
-                event.getLatFromStation(), event.getLonFromStation());
-        double angle = TauPTravelTimeCalculator.toAngle(distGC);
-        double expectedTravelSRaw = TauPTravelTimeCalculator.getSWaveTravelTime(earthquake.getDepth(),
-                angle);
-
-
-        double expectedIntensity = IntensityTable.getIntensity(earthquake.getMag(), GeoUtils.gcdToGeo(distGC));
-        if (expectedIntensity < 3.0) {
-            return false;
+        // The intensity gate keeps GLOBAL S-marking (markPossibleSWaves) conservative — don't
+        // invalidate far, weak stations' picks as "S of a small quake". Pure timing checks
+        // (ghost-cluster absorption, clearSWaves' keep-marked decision, quarantine S-confirmation)
+        // pass considerIntensity=false: there the question is only whether the arrival rides this
+        // quake's S wavefront.
+        if (considerIntensity) {
+            double distGC = GeoUtils.greatCircleDistance(earthquake.getLat(), earthquake.getLon(),
+                    event.getLatFromStation(), event.getLonFromStation());
+            double expectedIntensity = IntensityTable.getIntensity(earthquake.getMag(), GeoUtils.gcdToGeo(distGC));
+            if (expectedIntensity < 3.0) {
+                return false;
+            }
         }
+
+        return couldBeSArrivalTiming(event.getLatFromStation(), event.getLonFromStation(), event.getElevationFromStation(),
+                event.getpWave(), earthquake.getLat(), earthquake.getLon(), earthquake.getDepth(), earthquake.getOrigin());
+    }
+
+    /**
+     * Pure timing test: could an arrival picked at the given time be the S wave of a quake at the
+     * given hypocenter? No intensity/magnitude term, so it also works for candidate hypocenters
+     * that don't have an Earthquake object yet (quarantine S-confirmation in EarthquakeAnalysis).
+     */
+    @SuppressWarnings("RedundantIfStatement")
+    public static boolean couldBeSArrivalTiming(double eventLat, double eventLon, double eventAlt, long pWave,
+                                                double quakeLat, double quakeLon, double quakeDepth, long quakeOrigin){
+        long actualTravel = pWave - quakeOrigin;
+
+        double distGC = GeoUtils.greatCircleDistance(quakeLat, quakeLon, eventLat, eventLon);
+        double angle = TauPTravelTimeCalculator.toAngle(distGC);
+        double expectedTravelSRaw = TauPTravelTimeCalculator.getSWaveTravelTime(quakeDepth,
+                angle);
 
         if (expectedTravelSRaw >= 0) {
             // 985 because GQ has high tendency to detect S waves earlier
-            long expectedTravel = (long) ((expectedTravelSRaw + EarthquakeAnalysis.getElevationCorrection(event.getElevationFromStation()) * 1.5) * 1000);
+            long expectedTravel = (long) ((expectedTravelSRaw + EarthquakeAnalysis.getElevationCorrection(eventAlt) * 1.5) * 1000);
             long diff = actualTravel - expectedTravel;
             if (diff > -2000 - expectedTravel * 0.03 && diff < 6000 + expectedTravel * 0.05) {
                 return true;
@@ -364,6 +575,58 @@ public class ClusterAnalysis {
         }
     }
 
+    /**
+     * Releases picks that a well-established earthquake cannot explain, so a genuinely distinct
+     * second earthquake near it in space/time can form its own cluster.
+     * <p>
+     * Root problem this addresses: {@link #expandPWaves} claims any pick within a wide (~10 s) window
+     * of an existing quake's predicted arrival, including the picks of a *second* quake at the same
+     * epicenter (whose arrivals nearly coincide). Those picks are then owned by cluster #1 but trimmed
+     * from its fit as outliers — invisible, and unavailable to {@link #createNewClusters} (which needs
+     * unassigned picks). Here we detach the picks that fail the *strict* arrival test (P, PKP or PKIKP)
+     * and mark them {@link Event#rejectedByCluster} so the same cluster will not immediately re-steal
+     * them next cycle. A second cluster still only forms if enough released picks are mutually
+     * consistent at a distinct origin (see {@code clusterMinSize} in {@link #createNewClusters}); a
+     * cluster that turns out to be the *same* quake (same origin time) is folded back in
+     * {@link #canMerge}'s time guard. Only quakes with at least {@code releaseMinCorrectEvents} well-fit
+     * picks are eligible, so a still-forming solution is never disturbed.
+     */
+    private void releaseMisfitEvents() {
+        int minCorrect = HypocsSettings.getOrDefaultInt("releaseMinCorrectEvents", 8);
+        for (Cluster cluster : clusters) {
+            Earthquake earthquake = cluster.getEarthquake();
+            if (earthquake == null) {
+                continue;
+            }
+            Integer correct = cluster.getPreviousHypocenter() == null ? null : cluster.getPreviousHypocenter().correctEvents;
+            if (correct == null || correct < minCorrect) {
+                // only release from well-constrained quakes, never from a forming solution
+                Logger.tag("MQ").info("[MQ] release-GATE blocks C#%d (M%.1f): correctEv=%s < %d -> no picks released"
+                        .formatted(cluster.id, earthquake.getMag(), correct == null ? "-" : correct.toString(), minCorrect));
+                continue;
+            }
+
+            int released = 0;
+            for (Iterator<Event> it = cluster.getAssignedEvents().values().iterator(); it.hasNext(); ) {
+                Event event = it.next();
+                if (!event.isValid() || event.isSWave() || event.getpWave() <= 0) {
+                    continue; // invalid / S-wave handled by updateClusters; unpicked P ignored
+                }
+                // pWaveOnly=false so legitimate teleseismic PKP/PKIKP arrivals are NOT released
+                // (that would manufacture the M6+ duplicate we are trying to avoid); increasingPWindow
+                // =false so we use the strict window — only picks that fit no phase are freed.
+                if (!couldBeArrival(event, earthquake, false, false, false)) {
+                    event.assignedCluster = null;
+                    event.rejectedByCluster = cluster;
+                    it.remove();
+                    released++;
+                }
+            }
+            Logger.tag("MQ").info("[MQ] release: C#%d (M%.1f) correctEv=%d qualified -> released %d misfit picks (now assigned=%d)"
+                    .formatted(cluster.id, earthquake.getMag(), correct, released, cluster.getAssignedEvents().size()));
+        }
+    }
+
     private void expandCluster(Cluster cluster) {
         if (cluster.getEarthquake() != null && cluster.getPreviousHypocenter() != null) {
             if(cluster.getPreviousHypocenter().correctEvents > 7) {
@@ -380,7 +643,7 @@ public class ClusterAnalysis {
                     if (!cluster.containsStation(info.station()) && !_contains(newEvents, info.station())) {
                         double dist = info.dist();
                         for (Event ev : info.station().getAnalysis().getDetectedEvents()) {
-                            if (potentialArrival(ev, e, dist)) {
+                            if (ev.rejectedByCluster != cluster && potentialArrival(ev, e, dist)) {
                                 newEvents.add(ev);
                                 continue mainLoop;
                             }
@@ -404,8 +667,15 @@ public class ClusterAnalysis {
         mainLoop:
         for (AbstractStation station : stations) {
             for (Event event : station.getAnalysis().getDetectedEvents()) {
+                // A rejected (released) pick may only be re-claimed by the cluster that released it
+                // if it fits STRICTLY now (hypocenter refined toward it). Rejection blocks the wide
+                // window, not a strict fit — permanent exile starved a quake of its own picks when
+                // its early rough hypocenter caused over-release (real quake flickering in/out).
+                // Claim-back test == release test, so release/re-claim cannot oscillate.
                 if (event.isValid() && !event.isSWave() &&
                         !cluster.containsStation(station) &&
+                        (event.rejectedByCluster != cluster
+                                || couldBeArrival(event, cluster.getEarthquake(), false, false, false)) &&
                         couldBeArrival(event, cluster.getEarthquake(), true, true, false)) {
                     if (cluster.getAssignedEvents().putIfAbsent(station, event) == null) {
                         event.assignedCluster = cluster;
@@ -442,10 +712,13 @@ public class ClusterAnalysis {
     }
 
     private void createNewClusters() {
+        int minSize = HypocsSettings.getOrDefaultInt("clusterMinSize", 4);
+        int seeds = 0, created = 0, bestCorroboration = 0;
         for (AbstractStation station : stations) {
             for (Event event : station.getAnalysis().getDetectedEvents()) {
                 if (event.isValid() && !event.isSWave() && event.getpWave() > 0 && event.assignedCluster == null) {
                     // so we have eligible event
+                    seeds++;
                     ArrayList<Event> validEvents = new ArrayList<>();
                     validEvents.add(event);
                     closestLoop:
@@ -467,14 +740,20 @@ public class ClusterAnalysis {
                         }
                     }
 
+                    bestCorroboration = Math.max(bestCorroboration, validEvents.size());
                     // so no we have a list of all nearby events that could be earthquake
-                    if (validEvents.size() >= HypocsSettings.getOrDefaultInt("clusterMinSize", 4)) {
+                    if (validEvents.size() >= minSize) {
                         expandCluster(createCluster(validEvents));
+                        created++;
                     }
                 }
             }
         }
 
+        if (seeds > 0) {
+            Logger.tag("MQ").info("[MQ] createNew: unassignedSeeds=%d bestCorroboration=%d (need>=%d) newClusters=%d"
+                    .formatted(seeds, bestCorroboration, minSize, created));
+        }
     }
 
     private void updateClusters() {

@@ -569,6 +569,89 @@ public class EarthquakeAnalysis {
         Logger.tag("Hypocs").trace("Hypocenter finding finished in: %d ms".formatted(System.currentTimeMillis() - startTime));
     }
 
+    /**
+     * Is this new-quake candidate suspect (born inside another active quake's shaking window) and
+     * not yet confirmed by its own S arrivals? Suspect + unconfirmed = hold (no Earthquake object,
+     * no events fired); the cluster keeps revising and re-asks every revision.
+     */
+    private boolean isQuarantined(Cluster cluster, Hypocenter bestHypocenter) {
+        long codaWindowMs = HypocsSettings.getOrDefaultInt("quarantineCodaWindowMs", 4 * 60 * 1000);
+        double maxDistKm = HypocsSettings.getOrDefaultInt("quarantineDistKm", 1500);
+
+        Earthquake parent = null;
+        for (Earthquake other : getEarthquakes()) {
+            if (other.getCluster() == cluster) {
+                continue;
+            }
+            long dtOrigin = bestHypocenter.origin - other.getOrigin();
+            if (dtOrigin < -30 * 1000 || dtOrigin > codaWindowMs) {
+                continue;
+            }
+            if (GeoUtils.greatCircleDistance(bestHypocenter.lat, bestHypocenter.lon, other.getLat(), other.getLon()) > maxDistKm) {
+                continue;
+            }
+            parent = other;
+            break;
+        }
+
+        if (parent == null) {
+            return false; // no active quake nearby — normal instant creation
+        }
+
+        int[] evidence = countOwnSEvidence(cluster, bestHypocenter);
+        int pFit = evidence[0], sFit = evidence[1];
+        int required = Math.max(HypocsSettings.getOrDefaultInt("quarantineMinSPairs", 3),
+                (int) Math.ceil(pFit * HypocsSettings.getOrDefaultInt("quarantineMinSPairsPct", 25) / 100.0));
+
+        boolean promote = sFit >= required;
+        Logger.tag("MQ").info("[MQ] quarantine-%s: candidate M%.1f (C#%d, correct=%d) near M%.1f dtOrigin=%ds — own-S %d (P-fit %d, need %d)"
+                .formatted(promote ? "PROMOTE" : "HOLD", bestHypocenter.magnitude, cluster.id, bestHypocenter.correctEvents,
+                        parent.getMag(), (bestHypocenter.origin - parent.getOrigin()) / 1000, sFit, pFit, required));
+        return !promote;
+    }
+
+    /**
+     * Counts, over the candidate cluster's stations, how many corroborate the CANDIDATE hypocenter
+     * as P arrivals (strict fit) and how many show S evidence — ANY valid pick at the station whose
+     * timing rides the candidate's own S curve. Returns {pFit, sFit}.
+     * <p>
+     * Deliberately NOT a same-station P+S pair requirement: the picker holds a station in EVENT
+     * state ≥7 s, so at near stations the S arrives inside the still-open P event and a separate
+     * S pick never exists (playground-verified: the pair variant counted 0 across 160 evaluations).
+     * S re-trigger picks DO appear at stations where S−P exceeds the lockout — the very picks that
+     * fueled the ghost storms now serve as the confirmation signal. A coda-retrigger front has no
+     * secondary S wavefront of its own, so for ghosts these fits occur only by coincidence.
+     */
+    private int[] countOwnSEvidence(Cluster cluster, Hypocenter bestHypocenter) {
+        int pFit = 0, sFit = 0;
+        for (var entry : cluster.getAssignedEvents().entrySet()) {
+            Event pEvent = entry.getValue();
+            boolean assignedIsP = pEvent != null && pEvent.isValid() && pEvent.getpWave() > 0
+                    && ClusterAnalysis.couldBeArrival(pEvent.getLatFromStation(), pEvent.getLonFromStation(), pEvent.getElevationFromStation(),
+                    pEvent.getpWave(), bestHypocenter.lat, bestHypocenter.lon, bestHypocenter.depth, bestHypocenter.origin, 0,
+                    false, false, false);
+            if (assignedIsP) {
+                pFit++;
+            }
+
+            for (Event ev : entry.getKey().getAnalysis().getDetectedEvents()) {
+                if (!ev.isValid() || ev.getpWave() <= 0) {
+                    continue;
+                }
+                if (ev == pEvent && assignedIsP) {
+                    continue; // the pick we count as P cannot double as its own S
+                }
+                if (ClusterAnalysis.couldBeSArrivalTiming(ev.getLatFromStation(), ev.getLonFromStation(),
+                        ev.getElevationFromStation(), ev.getpWave(),
+                        bestHypocenter.lat, bestHypocenter.lon, bestHypocenter.depth, bestHypocenter.origin)) {
+                    sFit++;
+                    break;
+                }
+            }
+        }
+        return new int[]{pFit, sFit};
+    }
+
     private void removeQuake(Cluster cluster, Earthquake earthquake1) {
         getEarthquakes().remove(earthquake1);
         if (GlobalQuake.instance != null) {
@@ -607,6 +690,20 @@ public class EarthquakeAnalysis {
         cluster.setPreviousHypocenter(bestHypocenter);
 
         if (cluster.getEarthquake() == null) {
+            // Multi-quake mode: EMISSION QUARANTINE (the coda-ghost firewall). A brand-new candidate
+            // born inside another active quake's shaking window is not shown/alerted until it proves
+            // it is a real earthquake by developing its OWN S wavefront — same-station P+S pick
+            // pairs matching the CANDIDATE's travel-time curves. Coda re-trigger fronts (upstream
+            // README known issue #2: "M6+ false detections / duplicated earthquakes") don't produce
+            // a coherent secondary S front, so they never promote and expire silently with their
+            // cluster; a genuine doublet/aftershock promotes ~tens of seconds later. Emission gating
+            // only — nothing is vetoed or deleted (a hard veto would eat real events), revisions
+            // keep running, and a candidate away from any active quake is created instantly as
+            // always. See .ai/multi-quake-fix-design.md (quarantine design, informed by
+            // scanloc/NET-VISA-style S-association & coda suppression).
+            if (ClusterAnalysis.multiQuakeMode() && !testing && isQuarantined(cluster, bestHypocenter)) {
+                return;
+            }
             Earthquake newEarthquake = new Earthquake(cluster);
             if (!testing) {
                 getEarthquakes().add(newEarthquake);
