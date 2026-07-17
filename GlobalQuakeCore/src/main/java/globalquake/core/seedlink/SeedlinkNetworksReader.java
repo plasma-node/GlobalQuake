@@ -31,8 +31,8 @@ public class SeedlinkNetworksReader {
 	// took minutes before their first packet, which showed up as the bottom-left station counter
 	// crawling. Splitting each network across several parallel connections amortizes the
 	// round-trips; kept conservative so we don't hammer public servers with connections.
-	private static final int MAX_STATIONS_PER_CONNECTION = 64;
-	private static final int MAX_CONNECTIONS_PER_NETWORK = 6;
+	private static final int MAX_STATIONS_PER_CONNECTION = 32;
+	private static final int MAX_CONNECTIONS_PER_NETWORK = 8;
 
 	private Instant lastData;
 

@@ -173,6 +173,31 @@ public class BetterAnalysis extends Analysis {
                 setStatus(AnalysisStatus.IDLE);
                 latestEvent.endBadly();
             }
+
+            // multiQuakeMode level 2: PICKER RE-TRIGGERING. A station locked in EVENT state is deaf
+            // to any later earthquake — its P wave lands inside the open event and no pick is ever
+            // created, which starves cluster formation for same-epicenter doublets (upstream README
+            // known issue #1; the entire downstream release→quarantine pipeline is ready to receive
+            // these picks). A genuinely NEW onset shows as the short-term average spiking well above
+            // the medium-term average, which tracks the current (decaying) shaking level — plain
+            // coda decay cannot do that. When detected: close the current event at this instant and
+            // open a fresh pick, staying in EVENT state (preserves the one-open-event invariant,
+            // end-detection simply restarts on the new event).
+            if (globalquake.core.earthquake.ClusterAnalysis.multiQuakeLevel() >= 2
+                    && getStatus() == AnalysisStatus.EVENT && !latestEvent.hasEnded()
+                    && timeFromStart >= globalquake.core.HypocsSettings.getOrDefaultInt("retriggerMinGapMs", 10_000)
+                    && shortAverage > mediumAverage * (globalquake.core.HypocsSettings.getOrDefaultInt("retriggerRatioPct", 300) / 100.0)
+                    && time - eventTimer > 200) {
+                WaveformBuffer buffer = getWaveformBuffer().extract(time - EVENT_EXTENSION_TIME * 1000, time);
+                if (!buffer.isEmpty()) {
+                    latestEvent.end(time);
+                    Event event = new Event(this, time, buffer, !getStation().isSensitivityValid());
+                    getDetectedEvents().add(0, event);
+                    Logger.tag("MQ").info("[MQ] picker-RETRIGGER at %s %s: fresh onset %.1fs into open event (short/medium=%.1f)"
+                            .formatted(getStation().getNetworkCode(), getStation().getStationCode(),
+                                    timeFromStart / 1000.0, shortAverage / mediumAverage));
+                }
+            }
         }
 
 

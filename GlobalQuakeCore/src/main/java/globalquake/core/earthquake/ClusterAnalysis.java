@@ -60,7 +60,18 @@ public class ClusterAnalysis {
      * experiments only until the coda-ghost problem is solved.
      */
     public static boolean multiQuakeMode() {
-        return HypocsSettings.getOrDefaultInt("multiQuakeMode", 0) != 0;
+        return multiQuakeLevel() >= 1;
+    }
+
+    /**
+     * Experimental-feature tier: 0 = exact upstream behaviour; 1 = cluster/solver-level multi-quake
+     * detection (release, newborn survival, ghost guards, emission quarantine); 2 = level 1 PLUS
+     * station-picker re-triggering (BetterAnalysis emits a fresh pick when a sharp new onset rides
+     * on top of an open event — the root enabler for same-epicenter doublets). Each level strictly
+     * adds to the previous, so any regression can be bisected by stepping the number down.
+     */
+    public static int multiQuakeLevel() {
+        return HypocsSettings.getOrDefaultInt("multiQuakeMode", 0);
     }
 
     public void run() {
