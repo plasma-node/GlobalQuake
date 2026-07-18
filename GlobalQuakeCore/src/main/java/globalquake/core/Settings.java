@@ -179,6 +179,9 @@ public final class Settings {
     public static Boolean antialiasingQuakes;
     public static Boolean antialiasingOldQuakes;
     public static Boolean antialiasingClusters;
+    public static Boolean antialiasingBorders; // country/region outlines (off = crisp, default)
+    public static Boolean antialiasingText;     // all on-screen text labels
+    public static Double faultLodFactor;        // higher = hide more minor faults when zoomed out
     @SuppressWarnings("unused")
     public static Boolean debugSendPGV;
 
@@ -203,6 +206,8 @@ public final class Settings {
         loadProperty("antialiasingOldQuakes", "true");
         loadProperty("antialiasingClusters", "true");
         loadProperty("antialiasingQuakes", "true");
+        loadProperty("antialiasingBorders", "false");
+        loadProperty("antialiasingText", "true");
 
         loadProperty("discordBotSendRevisions", "false");
         loadProperty("discordBotChannelID", "insert");
@@ -264,6 +269,7 @@ public final class Settings {
         loadProperty("displayFaultLines", "true");
         loadProperty("faultColorSimple", "false");
         loadProperty("faultLineThickness", "1.0", o -> validateDouble(0.2, 8, (Double) o));
+        loadProperty("faultLodFactor", "300.0", o -> validateDouble(50, 1000, (Double) o));
         loadProperty("displayCityIntensities", "true");
         loadProperty("displayShakemaps", "true");
         loadProperty("displayTime", "true");

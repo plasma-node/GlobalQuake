@@ -762,9 +762,9 @@ public class GlobalQuakePanel extends GlobePanel {
 
         int totalH = headerH + bodyH + 4;
         int x = 6;
-        int minY = 138; // below the top-left detail box
-        int maxY = Math.max(minY, getHeight() - totalH - 190); // above the keybind HUD
-        int y = Math.max(minY, Math.min(getHeight() / 2 - totalH / 2, maxY));
+        // Stapled to a fixed top just under the top-left magnitude box, so resizing the window never
+        // shoves it around or over other HUD elements.
+        int y = 140;
 
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         RoundRectangle2D panel = new RoundRectangle2D.Float(x, y, width, totalH, 10, 10);

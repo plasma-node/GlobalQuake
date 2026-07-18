@@ -114,22 +114,17 @@ public class FeatureRegionalCapitals extends RenderFeature<CityLocation> {
         if (!element.shouldDraw) {
             return;
         }
-        // Tighter zoom thresholds than national capitals so ~63 labels only appear when regionally zoomed.
+        // Always shown (marker + label) at every zoom, smaller than national capitals.
         graphics.setColor(new Color(210, 210, 210));
         graphics.setStroke(new BasicStroke(2f));
+        graphics.fill(element.getShape());
 
-        if (renderProperties.scroll < 0.4) {
-            graphics.fill(element.getShape());
-        }
+        var point3D = GlobeRenderer.createVec3D(getCenterCoords(entity));
+        var centerPonint = renderer.projectPoint(point3D, renderProperties);
 
-        if (renderProperties.scroll < 0.10) {
-            var point3D = GlobeRenderer.createVec3D(getCenterCoords(entity));
-            var centerPonint = renderer.projectPoint(point3D, renderProperties);
-
-            String str = entity.getOriginal().name();
-            graphics.setFont(new Font("Calibri", Font.PLAIN, 11));
-            graphics.drawString(str, (int) centerPonint.x - graphics.getFontMetrics().stringWidth(str) / 2, (int) centerPonint.y - 7);
-        }
+        String str = entity.getOriginal().name();
+        graphics.setFont(new Font("Calibri", Font.PLAIN, 11));
+        graphics.drawString(str, (int) centerPonint.x - graphics.getFontMetrics().stringWidth(str) / 2, (int) centerPonint.y - 7);
     }
 
     @Override

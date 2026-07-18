@@ -47,6 +47,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
     private JCheckBox chkBoxFaultLines;
     private JCheckBox chkBoxFaultSimpleColors;
     private JSlider sliderFaultThickness;
+    private JSlider sliderFaultLod;
     private JComboBox<QualityClass> comboBoxQuality;
 
     private JCheckBox chkBoxClusters;
@@ -58,6 +59,8 @@ public class GraphicsSettingsPanel extends SettingsPanel{
     private JCheckBox chkBoxAntialiasOldQuakes;
 
     private JCheckBox chkBoxAntialiasQuakes;
+    private JCheckBox chkBoxAntialiasBorders;
+    private JCheckBox chkBoxAntialiasText;
 
 
     public GraphicsSettingsPanel() {
@@ -178,12 +181,14 @@ public class GraphicsSettingsPanel extends SettingsPanel{
 
         panel.add(clustersPanel);
 
-        JPanel antialiasPanel = new JPanel(new GridLayout(3,1));
+        JPanel antialiasPanel = new JPanel(new GridLayout(6,1));
         antialiasPanel.setBorder(new TitledBorder("Antialiasing"));
         antialiasPanel.add(chkBoxAntialiasStations = new JCheckBox("Stations", Settings.antialiasing));
         antialiasPanel.add(chkBoxAntialiasClusters = new JCheckBox("Clusters", Settings.antialiasingClusters));
         antialiasPanel.add(chkBoxAntialiasQuakes = new JCheckBox("Earthquakes", Settings.antialiasingQuakes));
         antialiasPanel.add(chkBoxAntialiasOldQuakes = new JCheckBox("Archived Earthquakes", Settings.antialiasingOldQuakes));
+        antialiasPanel.add(chkBoxAntialiasBorders = new JCheckBox("State/country borders", Settings.antialiasingBorders));
+        antialiasPanel.add(chkBoxAntialiasText = new JCheckBox("Text labels", Settings.antialiasingText));
 
         panel.add(antialiasPanel);
 
@@ -412,6 +417,23 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         faultThicknessPanel.add(sliderFaultThickness);
         stationsPanel.add(faultThicknessPanel);
 
+        JPanel faultLodPanel = new JPanel(new GridLayout(2,1));
+        faultLodPanel.add(new JLabel("Fault detail when zoomed out (lower = show more minor faults):"));
+
+        sliderFaultLod = new JSlider(SwingConstants.HORIZONTAL, 50, 1000, (int) (double) (Settings.faultLodFactor == null ? 300.0 : Settings.faultLodFactor));
+        sliderFaultLod.setMajorTickSpacing(100);
+        sliderFaultLod.setMinorTickSpacing(50);
+        sliderFaultLod.setPaintTicks(true);
+        sliderFaultLod.setPaintLabels(true);
+
+        sliderFaultLod.addChangeListener(changeEvent -> {
+            Settings.faultLodFactor = (double) sliderFaultLod.getValue();
+            Settings.changes++;
+        });
+
+        faultLodPanel.add(sliderFaultLod);
+        stationsPanel.add(faultLodPanel);
+
         fill(stationsPanel, 6);
 
         return stationsPanel;
@@ -426,6 +448,8 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         Settings.antialiasingClusters = chkBoxAntialiasClusters.isSelected();
         Settings.antialiasingQuakes = chkBoxAntialiasQuakes.isSelected();
         Settings.antialiasingOldQuakes = chkBoxAntialiasOldQuakes.isSelected();
+        Settings.antialiasingBorders = chkBoxAntialiasBorders.isSelected();
+        Settings.antialiasingText = chkBoxAntialiasText.isSelected();
 
         Settings.oldEventsTimeFilterEnabled = chkBoxEnableTimeFilter.isSelected();
         Settings.oldEventsTimeFilter = parseDouble(textFieldTimeFilter.getText(), "Old events max age", 0, 24 * 365);
@@ -460,6 +484,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         Settings.displayFaultLines = chkBoxFaultLines.isSelected();
         Settings.faultColorSimple = chkBoxFaultSimpleColors.isSelected();
         Settings.faultLineThickness = sliderFaultThickness.getValue() / 100.0;
+        Settings.faultLodFactor = (double) sliderFaultLod.getValue();
 
         Settings.qualityFilter = comboBoxQuality.getSelectedIndex();
 

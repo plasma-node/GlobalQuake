@@ -65,10 +65,15 @@ public class FeatureFaults extends RenderFeature<GQFault> {
         };
     }
 
+    // Faults longer than this always render, at any zoom, so the major structures stay visible.
+    private static final double MAJOR_ALWAYS_KM = 400.0;
+
     /** Minimum trace length (km) to draw at a given zoom — hides minor faults when zoomed out so
-     *  dense regions (e.g. China) stay legible and cheap; ~0 when zoomed in so everything shows. */
+     *  dense regions (e.g. China) stay legible and cheap; ~0 when zoomed in so everything shows. The
+     *  cull rate is user-tunable ({@code faultLodFactor}) and capped so major faults never hide. */
     private static double minLengthForScroll(double scroll) {
-        return Math.max(0, (scroll - 0.05) * 320.0);
+        double factor = Settings.faultLodFactor == null ? 300.0 : Settings.faultLodFactor;
+        return Math.min(MAJOR_ALWAYS_KM, Math.max(0, (scroll - 0.05) * factor));
     }
 
     @Override

@@ -18,6 +18,7 @@ import globalquake.ui.globe.feature.FeatureGeoPolygons;
 import globalquake.ui.globe.feature.FeatureHorizon;
 import globalquake.ui.globalquake.feature.FeatureArchivedEarthquake;
 import globalquake.ui.globalquake.feature.FeatureCities;
+import globalquake.ui.globalquake.feature.FeatureRegionalCapitals;
 import globalquake.ui.globalquake.feature.FeatureCluster;
 import globalquake.ui.globalquake.feature.FeatureEarthquake;
 import globalquake.ui.globalquake.feature.FeatureGlobalStation;
@@ -81,6 +82,7 @@ public final class GlobeScreenshotRenderer {
             r.addFeature(new FeatureEarthquake(GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes()));
             r.addFeature(new FeatureCluster(GlobalQuake.instance.getClusterAnalysis().getClusters()));
             r.addFeature(new FeatureCities());
+            r.addFeature(new FeatureRegionalCapitals());
             r.addFeature(new FeatureHomeLoc());
             renderer = r;
             Logger.info("Globe screenshot renderer initialised");
@@ -131,6 +133,8 @@ public final class GlobeScreenshotRenderer {
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                Boolean.FALSE.equals(Settings.antialiasingText) ? RenderingHints.VALUE_TEXT_ANTIALIAS_OFF : RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g.setColor(BG);
         g.fillRect(0, 0, width, height);
 
@@ -158,7 +162,7 @@ public final class GlobeScreenshotRenderer {
             Logger.error(e, "Globe render failed");
         }
 
-        drawHud(g, width, height, focus, focusLabel);
+        drawHud(g, width, height, focus, focusLabel, centerLat, centerLon);
         g.dispose();
 
         try {
@@ -198,9 +202,21 @@ public final class GlobeScreenshotRenderer {
         return best;
     }
 
-    private static void drawHud(Graphics2D g, int width, int height, Earthquake focus, String focusLabel) {
+    private static void drawHud(Graphics2D g, int width, int height, Earthquake focus, String focusLabel,
+                                double centerLat, double centerLon) {
         Font base = new Font("SansSerif", Font.PLAIN, 12);
         Font bold = new Font("SansSerif", Font.BOLD, 13);
+
+        // focused region (closest state/province/country to the camera centre), above the timestamp
+        g.setFont(base);
+        String region = null;
+        try {
+            region = globalquake.core.regions.Regions.getRegion(centerLat, centerLon);
+        } catch (Exception ignored) {
+        }
+        if (region != null && !region.isBlank()) {
+            box(g, 4, height - 40, region, new Color(150, 210, 255));
+        }
 
         // timestamp, bottom-left
         g.setFont(base);

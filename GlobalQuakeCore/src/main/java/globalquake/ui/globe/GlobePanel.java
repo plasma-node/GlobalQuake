@@ -482,6 +482,10 @@ public class GlobePanel extends JPanel implements GeoUtils {
         g.setColor(Color.black);
         g.fillRect(0, 0, getWidth(), getHeight());
 
+        // One text-antialiasing hint for the whole frame (globe labels + overlay HUD share this g).
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                Boolean.FALSE.equals(Settings.antialiasingText) ? RenderingHints.VALUE_TEXT_ANTIALIAS_OFF : RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
         renderer.render(g, renderer.getRenderProperties());
 
         frameCount.incrementAndGet();

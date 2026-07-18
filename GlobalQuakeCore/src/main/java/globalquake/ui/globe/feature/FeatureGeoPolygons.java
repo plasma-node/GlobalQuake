@@ -1,5 +1,6 @@
 package globalquake.ui.globe.feature;
 
+import globalquake.core.Settings;
 import globalquake.core.regions.GQPolygon;
 import globalquake.ui.globe.GlobeRenderer;
 import globalquake.ui.globe.Point2D;
@@ -86,7 +87,8 @@ public class FeatureGeoPolygons extends RenderFeature<GQPolygon> {
         if(!element.shouldDraw){
             return;
         }
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                Boolean.TRUE.equals(Settings.antialiasingBorders) ? RenderingHints.VALUE_ANTIALIAS_ON : RenderingHints.VALUE_ANTIALIAS_OFF);
         graphics.setColor(landColor);
         graphics.fill(element.getShape());
         graphics.setColor(borderColor);
