@@ -92,9 +92,11 @@ public class LocalStatusServer {
                   GET /all         all detected quakes: live + archived <24h, each with "near": bool (JSON)
                   GET /stations    every selected station: network, code, lat, lon, hasData (JSON)
                   GET /log         recent ERROR-level log lines (full logs = journalctl)
-                  GET /screenshot  live map PNG — shakemap hexagons, P/S waves, stations, home.
-                                   params: ?lat=&lon=&zoom=&fresh=1  (omit lat/lon to auto-focus the
-                                   most significant quake, else home; smaller zoom = more zoomed in)
+                  GET /screenshot  live map PNG — shakemap hexagons, P/S waves, stations, home marker,
+                                   a shaking-expected banner + recent-quakes list. Defaults to HOME.
+                                   params: ?zoom=N (1=default, higher=closer, lower=wider),
+                                   ?jumptonearest (centre on the biggest recent quake),
+                                   ?lat=&lon= (manual centre), ?stations=0 (hide stations), ?fresh=1
 
                 CONTROL
                   GET /sethome?lat=..&lon=..   set + persist home location (moves alerts live)
@@ -235,19 +237,22 @@ public class LocalStatusServer {
 
     private void screenshot(HttpExchange ex, NtfyService ntfy) throws IOException {
         NtfyConfig c = ntfy.cfg();
-        // NaN = "not supplied" → the renderer auto-focuses the most significant quake (else home).
+        // Default view is HOME. lat/lon override the centre; ?jumptonearest focuses the biggest
+        // recent quake. zoom is an intuitive multiplier: 1 = default, higher = closer, lower = wider.
         double lat = queryDouble(ex, "lat", Double.NaN);
         double lon = queryDouble(ex, "lon", Double.NaN);
-        double zoom = queryDouble(ex, "zoom", Double.NaN);
+        double zoom = queryDouble(ex, "zoom", 1.0);
+        boolean jump = queryStr(ex, "jumptonearest") != null;
+        boolean stations = queryDouble(ex, "stations", 1) != 0;
         boolean fresh = queryDouble(ex, "fresh", 0) != 0;
-        String key = lat + "," + lon + "," + zoom;
+        String key = lat + "," + lon + "," + zoom + "," + jump + "," + stations;
         long now = System.currentTimeMillis();
 
         byte[] png;
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, c.screenshotZoom);
+            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;

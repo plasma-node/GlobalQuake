@@ -2,7 +2,13 @@ package globalquake.notify;
 
 import globalquake.core.GlobalQuake;
 import globalquake.core.Settings;
+import globalquake.core.archive.ArchivedQuake;
 import globalquake.core.earthquake.data.Earthquake;
+import globalquake.core.earthquake.data.Hypocenter;
+import globalquake.core.geo.taup.TauPTravelTimeCalculator;
+import globalquake.core.intensity.IntensityScale;
+import globalquake.core.intensity.IntensityScales;
+import globalquake.core.intensity.Level;
 import globalquake.core.regions.Regions;
 import globalquake.ui.globe.GlobeRenderer;
 import globalquake.ui.globe.Point2D;
@@ -29,13 +35,16 @@ import java.io.ByteArrayOutputStream;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * Renders the REAL app globe offscreen to a PNG, reusing the same feature layers as
- * {@code GlobalQuakePanel} — so the screenshot shows the intensity-hexagon shakemap, P/S wave rings,
- * the "M x.x" epicenter label, blue→red station dots and the fading archived-quake circles, exactly
- * like the desktop UI. A single shared {@link GlobeRenderer} is built lazily and reused (the feature
- * layers pull live data each render; building per-request would leak the shakemap event subscriber).
+ * {@code GlobalQuakePanel} — intensity-hexagon shakemap, P/S wave rings, "M x.x" epicenter label,
+ * blue→red station dots, fading archived-quake circles, home marker. A custom HUD is drawn on top:
+ * a "shaking expected" banner with intensity + S-wave ETA to home, a focused-quake info line, and a
+ * recent-quakes list. A single shared {@link GlobeRenderer} is built lazily and reused.
  */
 public final class GlobeScreenshotRenderer {
 
@@ -54,7 +63,6 @@ public final class GlobeScreenshotRenderer {
                 return renderer;
             }
             GlobeRenderer r = new GlobeRenderer();
-            // base layers (mirrors GlobePanel.createRenderer)
             r.addFeature(new FeatureHorizon(new Point2D(Settings.homeLat, Settings.homeLon), 1));
             r.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsMD, 0.5, Double.MAX_VALUE));
             r.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsHDFiltered, 0.25, 0.5));
@@ -65,7 +73,6 @@ public final class GlobeScreenshotRenderer {
             r.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsNZ, 0, 0.5));
             r.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsHW, 0, 0.5));
             r.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsIT, 0, 0.20));
-            // client layers (mirrors GlobalQuakePanel.addRenderFeatures)
             r.addFeature(new FeatureShakemap());
             r.addFeature(new FeatureGlobalStation(GlobalQuake.instance.getStationManager().getStations()));
             r.addFeature(new FeatureArchivedEarthquake(GlobalQuake.instance.getArchive().getArchivedQuakes()));
@@ -80,31 +87,32 @@ public final class GlobeScreenshotRenderer {
     }
 
     /**
-     * @param centerLat NaN to auto-focus (most significant recent quake, else home)
-     * @param scroll    NaN to auto-pick zoom (by focused quake magnitude, else defaultZoom)
+     * @param lat,lon        NaN to use home (or the focused quake if jumpToNearest)
+     * @param zoomMultiplier intuitive zoom: 1.0 = default view, higher = closer, lower = wider
+     * @param jumpToNearest  center on the most significant recent quake instead of home
+     * @param showStations   draw station dots
+     * @param baseScroll     globe scroll at zoomMultiplier 1.0 (config screenshotZoom)
      */
-    public static byte[] renderPng(int width, int height, double centerLat, double centerLon,
-                                   double scroll, double defaultZoom) {
-        double lat = centerLat, lon = centerLon, zoom = scroll;
-
-        if (Double.isNaN(lat) || Double.isNaN(lon)) {
-            Earthquake target = pickTarget();
-            if (target != null) {
-                lat = target.getLat();
-                lon = target.getLon();
-                if (Double.isNaN(zoom)) {
-                    zoom = Math.max(0.05, target.getMag() / 50.0); // cinema-style: bigger quake, wider view
-                }
-            } else {
-                lat = Settings.homeLat;
-                lon = Settings.homeLon;
-                if (Double.isNaN(zoom)) {
-                    zoom = defaultZoom;
-                }
-            }
+    public static byte[] renderPng(int width, int height, double lat, double lon, double zoomMultiplier,
+                                   boolean jumpToNearest, boolean showStations, double baseScroll) {
+        if (zoomMultiplier < 0.001) {
+            zoomMultiplier = 1.0;
         }
-        if (Double.isNaN(zoom)) {
-            zoom = defaultZoom;
+        Earthquake focus = pickTarget(); // for the HUD (and for jumpToNearest centering)
+
+        double centerLat, centerLon, scroll;
+        if (!Double.isNaN(lat) && !Double.isNaN(lon)) {
+            centerLat = lat;
+            centerLon = lon;
+            scroll = baseScroll / zoomMultiplier;
+        } else if (jumpToNearest && focus != null) {
+            centerLat = focus.getLat();
+            centerLon = focus.getLon();
+            scroll = Math.max(0.02, focus.getMag() / 50.0) / zoomMultiplier;
+        } else {
+            centerLat = Settings.homeLat;
+            centerLon = Settings.homeLon;
+            scroll = baseScroll / zoomMultiplier;
         }
 
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
@@ -115,16 +123,24 @@ public final class GlobeScreenshotRenderer {
 
         try {
             GlobeRenderer r = getRenderer();
-            RenderProperties props = new RenderProperties(width, height, lat, lon, zoom);
+            RenderProperties props = new RenderProperties(width, height, centerLat, centerLon, scroll);
             synchronized (r) {
-                r.updateCamera(props);
-                r.render(g, props);
+                Double oldMul = Settings.stationsSizeMul;
+                double base = oldMul == null ? 1.0 : oldMul;
+                // stations 50% smaller than the GUI; 0 hides them (?stations=0)
+                Settings.stationsSizeMul = showStations ? base * 0.5 : 0.0;
+                try {
+                    r.updateCamera(props);
+                    r.render(g, props);
+                } finally {
+                    Settings.stationsSizeMul = oldMul;
+                }
             }
         } catch (Exception e) {
             Logger.error(e, "Globe render failed");
         }
 
-        drawHud(g, width, height);
+        drawHud(g, width, height, focus);
         g.dispose();
 
         try {
@@ -153,7 +169,7 @@ public final class GlobeScreenshotRenderer {
                 }
                 double distHome = GeoUtils.greatCircleDistance(q.getLat(), q.getLon(), Settings.homeLat, Settings.homeLon);
                 double ageMin = (now - q.getOrigin()) / 60000.0;
-                double score = q.getMag() * 100 - distHome * 0.02 - ageMin * 1.0;
+                double score = q.getMag() * 100 - distHome * 0.02 - ageMin;
                 if (score > bestScore) {
                     bestScore = score;
                     best = q;
@@ -164,24 +180,109 @@ public final class GlobeScreenshotRenderer {
         return best;
     }
 
-    private static void drawHud(Graphics2D g, int width, int height) {
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        // timestamp, bottom-left
-        String ts = TS.format(Instant.ofEpochMilli(System.currentTimeMillis()));
-        g.setColor(new Color(0, 0, 0, 150));
-        g.fillRect(4, height - 22, 8 + g.getFontMetrics().stringWidth(ts), 18);
-        g.setColor(Color.white);
-        g.drawString(ts, 8, height - 9);
+    private static void drawHud(Graphics2D g, int width, int height, Earthquake focus) {
+        Font base = new Font("SansSerif", Font.PLAIN, 12);
+        Font bold = new Font("SansSerif", Font.BOLD, 13);
 
-        // top quake summary, top-left
-        Earthquake t = pickTarget();
-        String line = t != null
-                ? "M%.1f  %s  %.0fkm deep".formatted(t.getMag(),
-                    t.getRegion() == null || t.getRegion().isBlank() ? "?" : t.getRegion(), t.getDepth())
-                : "No active earthquakes";
+        // timestamp, bottom-left
+        g.setFont(base);
+        String ts = TS.format(Instant.ofEpochMilli(System.currentTimeMillis()));
+        box(g, 4, height - 22, ts, new Color(220, 220, 220));
+
+        // focused-quake info line, top-left
+        if (focus != null) {
+            Hypocenter h = focus.getHypocenter();
+            String quality = (h != null && h.quality != null && h.quality.getSummary() != null) ? h.quality.getSummary().name() : "?";
+            String line = "M%.1f  Q:%s  rev %d  %.3f, %.3f  %.0fkm"
+                    .formatted(focus.getMag(), quality, focus.getRevisionID(), focus.getLat(), focus.getLon(), focus.getDepth());
+            g.setFont(bold);
+            box(g, 4, 4, line, new Color(255, 180, 70));
+
+            // "<< SHAKING EXPECTED >>" banner + intensity + S ETA, when home shaking is expected
+            drawShakingBanner(g, width, focus);
+        } else {
+            g.setFont(bold);
+            box(g, 4, 4, "No active earthquakes", new Color(170, 170, 170));
+        }
+
+        drawRecentList(g, width, height);
+    }
+
+    private static void drawShakingBanner(Graphics2D g, int width, Earthquake q) {
+        double distGeo = GeoUtils.geologicalDistance(q.getLat(), q.getLon(), -q.getDepth(), Settings.homeLat, Settings.homeLon, 0.0);
+        double pgaHome = GeoUtils.pgaFunction(q.getMag(), distGeo, q.getDepth());
+        double feltThreshold = IntensityScales.INTENSITY_SCALES[Settings.shakingLevelScale].getLevels().get(Settings.shakingLevelIndex).getPga();
+        if (pgaHome < feltThreshold) {
+            return;
+        }
+        IntensityScale scale = IntensityScales.getIntensityScale();
+        Level level = scale.getLevel(pgaHome);
+        String intensity = level != null ? level.getFullName() + " " + scale.getNameShort() : "?";
+
+        double distGcd = GeoUtils.greatCircleDistance(q.getLat(), q.getLon(), Settings.homeLat, Settings.homeLon);
+        double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(q.getDepth(), TauPTravelTimeCalculator.toAngle(distGcd));
+        double age = (GlobalQuake.instance.currentTimeMillis() - q.getOrigin()) / 1000.0;
+        String eta = sTravel < 0 ? "" : "  S wave " + (sTravel - age > 0 ? "in " + Math.round(sTravel - age) + "s" : "now");
+
+        String banner = "<< SHAKING EXPECTED >>   intensity %s%s".formatted(intensity, eta);
+        g.setFont(new Font("SansSerif", Font.BOLD, 15));
+        int w = g.getFontMetrics().stringWidth(banner);
+        int x = (width - w) / 2;
+        g.setColor(new Color(150, 20, 20, 210));
+        g.fillRect(x - 10, 30, w + 20, 24);
+        g.setColor(Color.white);
+        g.drawString(banner, x, 47);
+    }
+
+    private static void drawRecentList(Graphics2D g, int width, int height) {
+        GlobalQuake gq = GlobalQuake.instance;
+        if (gq == null) {
+            return;
+        }
+        List<Earthquake> recent = new ArrayList<>();
+        try {
+            for (Earthquake q : gq.getEarthquakeAnalysis().getEarthquakes()) {
+                if (q.getHypocenter() != null && q.getOrigin() != 0) {
+                    recent.add(q);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        recent.sort(Comparator.comparingLong(Earthquake::getOrigin).reversed());
+        if (recent.isEmpty()) {
+            return;
+        }
+
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        int lines = Math.min(6, recent.size());
+        int lineH = 15;
+        int boxW = 240;
+        int boxH = lineH * lines + 22;
+        int x = width - boxW - 6;
+        int y = height - boxH - 6;
+        g.setColor(new Color(0, 0, 0, 160));
+        g.fillRect(x, y, boxW, boxH);
+        g.setColor(new Color(200, 200, 200));
+        g.drawString("Recent earthquakes", x + 8, y + 15);
+        for (int i = 0; i < lines; i++) {
+            Earthquake q = recent.get(i);
+            String region = q.getRegion() == null || q.getRegion().isBlank() ? "?" : q.getRegion();
+            if (region.length() > 26) {
+                region = region.substring(0, 25) + "…";
+            }
+            g.setColor(new Color(255, 190, 90));
+            g.drawString("M%.1f".formatted(q.getMag()), x + 8, y + 15 + lineH * (i + 1));
+            g.setColor(new Color(220, 220, 220));
+            g.drawString(region, x + 50, y + 15 + lineH * (i + 1));
+        }
+    }
+
+    private static void box(Graphics2D g, int x, int y, String s, Color fg) {
+        int w = g.getFontMetrics().stringWidth(s);
+        int h = g.getFontMetrics().getHeight();
         g.setColor(new Color(0, 0, 0, 150));
-        g.fillRect(4, 4, 8 + g.getFontMetrics().stringWidth(line), 18);
-        g.setColor(t != null ? new Color(255, 170, 60) : new Color(170, 170, 170));
-        g.drawString(line, 8, 17);
+        g.fillRect(x, y, w + 8, h + 2);
+        g.setColor(fg);
+        g.drawString(s, x + 4, y + h - 2);
     }
 }

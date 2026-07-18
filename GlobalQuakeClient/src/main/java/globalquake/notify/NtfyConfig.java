@@ -67,7 +67,7 @@ public class NtfyConfig {
     public long testTtlMs = 300000;     // test quakes auto-expire after this (5 min)
     public int screenshotWidth = 900;
     public int screenshotHeight = 700;
-    public double screenshotZoom = 0.2; // globe scroll (smaller = more zoomed in; ~0.2 ≈ one state)
+    public double screenshotZoom = 0.075; // globe scroll at zoom=1 (~one state around home)
     public long screenshotDebounceMs = 1000; // reuse a cached image within this window (anti-DDoS)
 
     public long fingerprintTimeToleranceMs = 30000;
@@ -264,7 +264,7 @@ public class NtfyConfig {
                 # US state) + cache window. Omit lat/lon to auto-focus the most significant quake.
                 screenshotWidth=900
                 screenshotHeight=700
-                screenshotZoom=0.2
+                screenshotZoom=0.075
                 screenshotDebounceMs=1000
 
                 # Physical-quake matching (survives UUID churn / re-detections)
