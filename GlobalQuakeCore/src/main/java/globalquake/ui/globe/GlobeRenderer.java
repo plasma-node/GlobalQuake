@@ -99,6 +99,16 @@ public class GlobeRenderer {
     }
 
     public boolean project3D(Path2D.Float result, Polygon3D polygon3D, boolean canClip, RenderProperties renderProperties) {
+        return project3D(result, polygon3D, canClip, true, renderProperties);
+    }
+
+    /**
+     * @param close whether the geometry is a closed ring (true, the default for country/region
+     *              polygons) or an open polyline (false, for fault traces). When false the projection
+     *              does not wrap the last vertex back to the first, so open lines get no spurious
+     *              closing chord.
+     */
+    public boolean project3D(Path2D.Float result, Polygon3D polygon3D, boolean canClip, boolean close, RenderProperties renderProperties) {
         if(polygon3D == null || polygon3D.getBoundingBoxCorner(0) == null){
             return false;
         }
@@ -171,7 +181,7 @@ public class GlobeRenderer {
             mask &= get_mask(point2D.x, point2D.y, renderProperties);
             result.lineTo(point2D.x, point2D.y);
 
-            if (point == polygon3D.getPoints().get(polygon3D.getPoints().size() - 1)) {
+            if (close && point == polygon3D.getPoints().get(polygon3D.getPoints().size() - 1)) {
                 i = 0;
                 last = true;
                 continue;
@@ -186,7 +196,7 @@ public class GlobeRenderer {
             return false;
         }
 
-        if (bowEnd != null) {
+        if (close && bowEnd != null) {
             bowAlgorithm(point2D, result, bowStart, firstStart, true, renderProperties);
         }
 

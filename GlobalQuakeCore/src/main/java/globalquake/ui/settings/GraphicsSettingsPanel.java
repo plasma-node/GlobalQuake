@@ -43,6 +43,9 @@ public class GraphicsSettingsPanel extends SettingsPanel{
     private JCheckBox chkBoxShakemap;
     private JCheckBox chkBoxCityIntensities;
     private JCheckBox chkBoxCapitals;
+    private JCheckBox chkBoxRegionalCapitals;
+    private JCheckBox chkBoxFaultLines;
+    private JSlider sliderFaultThickness;
     private JComboBox<QualityClass> comboBoxQuality;
 
     private JCheckBox chkBoxClusters;
@@ -148,7 +151,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
 
         panel.add(dateFormatPanel);
 
-        JPanel mainWindowPanel = new JPanel(new GridLayout(4,2));
+        JPanel mainWindowPanel = new JPanel(new GridLayout(5,2));
         mainWindowPanel.setBorder(new TitledBorder("Main Screen"));
 
         mainWindowPanel.add(chkBoxDisplaySystemInfo = new JCheckBox("Display system info", Settings.displaySystemInfo));
@@ -159,6 +162,8 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         mainWindowPanel.add(chkBoxTime = new JCheckBox("Display time", Settings.displayTime));
         mainWindowPanel.add(chkBoxCityIntensities = new JCheckBox("Display estimated intensities in cities", Settings.displayCityIntensities));
         mainWindowPanel.add(chkBoxCapitals = new JCheckBox("Display capital cities", Settings.displayCapitalCities));
+        mainWindowPanel.add(chkBoxRegionalCapitals = new JCheckBox("Display US/Canada state & province capitals", Settings.displayRegionalCapitals));
+        mainWindowPanel.add(chkBoxFaultLines = new JCheckBox("Display fault lines (F)", Settings.displayFaultLines));
 
         panel.add(mainWindowPanel);
 
@@ -388,6 +393,23 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         stationSizePanel.add(sliderStationsSize);
         stationsPanel.add(stationSizePanel);
 
+        JPanel faultThicknessPanel = new JPanel(new GridLayout(2,1));
+        faultThicknessPanel.add(new JLabel("Fault line thickness multiplier (100 default, 20 thin, 800 thick):"));
+
+        sliderFaultThickness = new JSlider(SwingConstants.HORIZONTAL, 20, 800, (int) (Settings.faultLineThickness * 100));
+        sliderFaultThickness.setMajorTickSpacing(100);
+        sliderFaultThickness.setMinorTickSpacing(20);
+        sliderFaultThickness.setPaintTicks(true);
+        sliderFaultThickness.setPaintLabels(true);
+
+        sliderFaultThickness.addChangeListener(changeEvent -> {
+            Settings.faultLineThickness = sliderFaultThickness.getValue() / 100.0;
+            Settings.changes++;
+        });
+
+        faultThicknessPanel.add(sliderFaultThickness);
+        stationsPanel.add(faultThicknessPanel);
+
         fill(stationsPanel, 6);
 
         return stationsPanel;
@@ -432,6 +454,9 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         Settings.displayTime = chkBoxTime.isSelected();
         Settings.displayCityIntensities = chkBoxCityIntensities.isSelected();
         Settings.displayCapitalCities = chkBoxCapitals.isSelected();
+        Settings.displayRegionalCapitals = chkBoxRegionalCapitals.isSelected();
+        Settings.displayFaultLines = chkBoxFaultLines.isSelected();
+        Settings.faultLineThickness = sliderFaultThickness.getValue() / 100.0;
 
         Settings.qualityFilter = comboBoxQuality.getSelectedIndex();
 

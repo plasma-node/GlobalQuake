@@ -1,0 +1,16 @@
+gem_active_faults.geojson
+==========================
+
+Source: GEM Global Active Faults Database (GEM GAF-DB)
+        https://github.com/GEMScienceTools/gem-global-active-faults
+
+License: Creative Commons Attribution-ShareAlike 4.0 International (CC-BY-SA 4.0)
+         https://creativecommons.org/licenses/by-sa/4.0/
+
+Citation: Styron, Richard, and Marco Pagani. "The GEM Global Active Faults Database."
+          Earthquake Spectra, vol. 36, no. 1_suppl, 2020, pp. 160-180.
+          https://doi.org/10.1177/8755293020944182
+
+This data file is redistributed unmodified under the terms of CC-BY-SA 4.0. The
+ShareAlike term applies to this data file; if you modify and redistribute it, keep the
+same license and attribution.

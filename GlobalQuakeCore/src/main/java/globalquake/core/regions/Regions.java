@@ -54,6 +54,9 @@ public class Regions {
     public static final List<GQPolygon> raw_polygonsIT = new ArrayList<>();
     public static final List<Region> regionsIT = new ArrayList<>();
 
+    /** GEM Global Active Faults traces (open polylines) for the fault-lines overlay. */
+    public static final List<GQFault> raw_faults = new ArrayList<>();
+
     private static final List<Region> regionSearchHD = new ArrayList<>();
     private static HashMap<String, Double> shorelineLookup;
 
@@ -71,6 +74,10 @@ public class Regions {
         parseGeoJson("polygons_converted/hawaii-countries.geojson", raw_polygonsHW, regionsHW, NONE);
         parseGeoJson("polygons_converted/italy_provinces.geojson", raw_polygonsIT, regionsIT, NONE);
         parseGeoJson("polygons_converted/region_dataset.geojson", null, regionSearchHD, NONE);
+
+        long faultStart = System.currentTimeMillis();
+        parseFaults("faults/gem_active_faults.geojson", raw_faults);
+        Logger.info("Loaded %d fault traces in %d ms".formatted(raw_faults.size(), System.currentTimeMillis() - faultStart));
 
         for(List<Region> list : List.of(regionsUS, regionsAK, regionsJP, regionsNZ, regionsHW, regionsIT)){
             regionSearchHD.addAll(list);
@@ -451,6 +458,38 @@ public class Regions {
                     org.geojson.Polygon pol = new org.geojson.Polygon(polygon.get(0));
                     if (raw != null) {
                         raw.add(new GQPolygon(pol));
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Load fault traces from a GEM-format GeoJSON of {@code LineString}/{@code MultiLineString}
+     * features. Unlike {@link #parseGeoJson}, this keeps the lines open (no ring closure) and reads
+     * each feature's {@code slip_type} to categorize it for coloring.
+     */
+    public static void parseFaults(String path, List<GQFault> faults) throws IOException {
+        URL resource = ClassLoader.getSystemClassLoader().getResource(path);
+        if (resource == null) {
+            throw new IOException("Unable to load faults: %s".formatted(path));
+        }
+        InputStream stream;
+        FeatureCollection featureCollection = new ObjectMapper().readValue(stream = resource.openStream(),
+                FeatureCollection.class);
+        stream.close();
+
+        for (Feature f : featureCollection.getFeatures()) {
+            byte slipType = GQFault.categorize(f.getProperty("slip_type"));
+            GeoJsonObject o = f.getGeometry();
+            if (o instanceof LineString ls) {
+                if (ls.getCoordinates().size() >= 2) {
+                    faults.add(new GQFault(ls.getCoordinates(), slipType));
+                }
+            } else if (o instanceof MultiLineString mls) {
+                for (List<LngLatAlt> line : mls.getCoordinates()) {
+                    if (line.size() >= 2) {
+                        faults.add(new GQFault(line, slipType));
                     }
                 }
             }

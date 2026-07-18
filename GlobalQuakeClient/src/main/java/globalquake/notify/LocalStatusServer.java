@@ -101,6 +101,7 @@ public class LocalStatusServer {
                                      ?quake=<uuid>    centre + label a specific past/live quake (id from /all)
                                      ?lat=&lon=       manual centre
                                      ?stations=0      hide station dots
+                                     ?faults=0|1      force fault lines off/on (default: app setting)
                                      ?download=1      send as a file download instead of inline
                                      ?fresh=1         bypass the 1-second render cache (force a new image)
 
@@ -252,6 +253,8 @@ public class LocalStatusServer {
         boolean stations = queryDouble(ex, "stations", 1) != 0;
         boolean fresh = queryDouble(ex, "fresh", 0) != 0;
         boolean download = queryDouble(ex, "download", 0) != 0;
+        // ?faults=0|1 forces fault lines off/on for this shot; absent = honour the app setting.
+        Boolean faultsOverride = queryStr(ex, "faults") == null ? null : queryDouble(ex, "faults", 1) != 0;
 
         // ?quake=<uuid> → centre + label a specific past (archived) or live quake
         String focusLabel = null;
@@ -265,14 +268,14 @@ public class LocalStatusServer {
             }
         }
 
-        String key = lat + "," + lon + "," + zoom + "," + jump + "," + stations + "," + focusLabel;
+        String key = lat + "," + lon + "," + zoom + "," + jump + "," + stations + "," + focusLabel + "," + faultsOverride;
         long now = System.currentTimeMillis();
 
         byte[] png;
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom, focusLabel);
+            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom, focusLabel, faultsOverride);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;

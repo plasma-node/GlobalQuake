@@ -14,6 +14,8 @@ import globalquake.core.earthquake.quality.Quality;
 import globalquake.core.earthquake.quality.QualityClass;
 import globalquake.core.intensity.MMIIntensityScale;
 import globalquake.core.station.AbstractStation;
+import globalquake.core.regions.GQFault;
+import globalquake.ui.globe.feature.FeatureFaults;
 import globalquake.core.database.SeedlinkNetwork;
 import globalquake.core.database.SeedlinkStatus;
 import globalquake.events.GlobalQuakeLocalEventListener;
@@ -93,6 +95,10 @@ public class GlobalQuakePanel extends GlobePanel {
                 if (e.getKeyCode() == KeyEvent.VK_C) {
                     setCinemaMode(!isCinemaMode());
                 }
+                if (e.getKeyCode() == KeyEvent.VK_F) {
+                    Settings.displayFaultLines = !Settings.displayFaultLines;
+                    Settings.save();
+                }
             }
         });
 
@@ -129,6 +135,7 @@ public class GlobalQuakePanel extends GlobePanel {
         getRenderer().addFeature(new FeatureEarthquake(GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes()));
         getRenderer().addFeature(new FeatureCluster(GlobalQuake.instance.getClusterAnalysis().getClusters()));
         getRenderer().addFeature(new FeatureCities());
+        getRenderer().addFeature(new FeatureRegionalCapitals());
         getRenderer().addFeature(new FeatureHomeLoc());
     }
 
@@ -222,6 +229,12 @@ public class GlobalQuakePanel extends GlobePanel {
 
         try {
             drawActiveQuakesList(g);
+        } catch (Exception e) {
+            Logger.error(e);
+        }
+
+        try {
+            drawFaultLegend(g);
         } catch (Exception e) {
             Logger.error(e);
         }
@@ -552,6 +565,8 @@ public class GlobalQuakePanel extends GlobePanel {
 
         settingsStrings.add(new SettingInfo("Cinema Mode (C): ", isCinemaMode() ? "Enabled" : "Disabled", isCinemaMode() ? Color.green : Color.red));
 
+        settingsStrings.add(new SettingInfo("Fault Lines (F): ", Settings.displayFaultLines ? "Shown" : "Hidden", Settings.displayFaultLines ? Color.green : Color.red));
+
         if (GlobalQuake.instance.getStationDatabaseManager() != null && GlobalQuake.instance.getStationDatabaseManager().getStationDatabase() != null) {
             int totalStations = 0;
             int connectedStations = 0;
@@ -760,6 +775,47 @@ public class GlobalQuakePanel extends GlobePanel {
             g.drawString(age, ageRight - ageW, rowY + rowH - 7);
         }
 
+        g.setStroke(new BasicStroke(1f));
+    }
+
+    /** Compact slip-type color key, bottom-right, shown only while fault lines are on. */
+    private void drawFaultLegend(Graphics2D g) {
+        if (!Boolean.TRUE.equals(Settings.displayFaultLines)) {
+            return;
+        }
+        String[] labels = {"Dextral", "Sinistral", "Strike-slip", "Normal", "Reverse"};
+        byte[] cats = {GQFault.SLIP_DEXTRAL, GQFault.SLIP_SINISTRAL, GQFault.SLIP_STRIKE_SLIP, GQFault.SLIP_NORMAL, GQFault.SLIP_REVERSE};
+
+        g.setFont(new Font("Calibri", Font.PLAIN, 12));
+        FontMetrics fm = g.getFontMetrics();
+        int rowH = 15;
+        int swatch = 16;
+        int pad = 6;
+        int maxLabel = 0;
+        for (String l : labels) {
+            maxLabel = Math.max(maxLabel, fm.stringWidth(l));
+        }
+        int width = pad + swatch + 6 + maxLabel + pad;
+        int height = pad + labels.length * rowH + pad;
+        int x = getWidth() - width - 6;
+        int y = getHeight() - height - 26; // clears the bottom-right status string
+
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(0, 0, 0, 150));
+        g.fillRoundRect(x, y, width, height, 8, 8);
+        g.setColor(new Color(0, 90, 192));
+        g.setStroke(new BasicStroke(1f));
+        g.drawRoundRect(x, y, width, height, 8, 8);
+
+        int ry = y + pad + 11;
+        for (int i = 0; i < labels.length; i++) {
+            g.setColor(FeatureFaults.colorFor(cats[i]));
+            g.setStroke(new BasicStroke(3f));
+            g.drawLine(x + pad, ry - 4, x + pad + swatch, ry - 4);
+            g.setColor(Color.white);
+            g.drawString(labels[i], x + pad + swatch + 6, ry);
+            ry += rowH;
+        }
         g.setStroke(new BasicStroke(1f));
     }
 

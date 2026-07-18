@@ -2,6 +2,7 @@ package globalquake.ui.globe;
 
 import globalquake.core.Settings;
 import globalquake.core.regions.Regions;
+import globalquake.ui.globe.feature.FeatureFaults;
 import globalquake.ui.globe.feature.FeatureGeoPolygons;
 import globalquake.ui.globe.feature.FeatureHorizon;
 import globalquake.ui.globe.feature.RenderEntity;
@@ -192,6 +193,9 @@ public class GlobePanel extends JPanel implements GeoUtils {
         renderer.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsNZ, 0, 0.5));
         renderer.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsHW, 0, 0.5));
         renderer.addFeature(new FeatureGeoPolygons(Regions.raw_polygonsIT, 0, 0.20));
+
+        // Fault lines draw over land but under the data overlays (stations/quakes) added by subclasses.
+        renderer.addFeature(new FeatureFaults(Regions.raw_faults));
     }
 
     private void animationThread() {

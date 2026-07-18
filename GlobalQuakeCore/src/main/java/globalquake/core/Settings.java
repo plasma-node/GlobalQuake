@@ -144,6 +144,9 @@ public final class Settings {
     public static Integer stationsShapeIndex;
     public static Boolean displayCityIntensities;
     public static Boolean displayCapitalCities;
+    public static Boolean displayRegionalCapitals;
+    public static Boolean displayFaultLines;
+    public static Double faultLineThickness;
     public static Boolean alertPossibleShaking;
     public static Double alertPossibleShakingDistance;
     public static Boolean enableEarthquakeSounds;
@@ -256,6 +259,9 @@ public final class Settings {
         loadProperty("reduceRevisions", "true");
 
         loadProperty("displayCapitalCities", "true");
+        loadProperty("displayRegionalCapitals", "true");
+        loadProperty("displayFaultLines", "true");
+        loadProperty("faultLineThickness", "1.0", o -> validateDouble(0.2, 8, (Double) o));
         loadProperty("displayCityIntensities", "true");
         loadProperty("displayShakemaps", "true");
         loadProperty("displayTime", "true");
