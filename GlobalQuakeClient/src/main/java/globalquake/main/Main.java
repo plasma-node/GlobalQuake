@@ -24,6 +24,7 @@ public class Main {
     private static boolean headless = false;
     public static boolean autoSelect = false;
     public static double autoSelectRadiusMiles = -1; // -1 = select all (no radius limit)
+    public static boolean fastScan = false; // only scan seedlink networks carrying selected stations
 
     public static final Image LOGO = new ImageIcon(Objects.requireNonNull(ClassLoader.getSystemClassLoader().getResource("logo/logo.png"))).getImage();
 
@@ -58,6 +59,10 @@ public class Main {
         homeOption.setRequired(false);
         options.addOption(homeOption);
 
+        Option fastScanOption = new Option("f", "fastscan", false, "only scan the seedlink networks that carry your already-selected stations (much faster warm boot + fewer public-server queries; won't discover newly-available stations until a full boot)");
+        fastScanOption.setRequired(false);
+        options.addOption(fastScanOption);
+
         CommandLineParser parser = new org.apache.commons.cli.BasicParser();
         HelpFormatter formatter = new HelpFormatter();
         CommandLine cmd = null;
@@ -84,6 +89,7 @@ public class Main {
 
         headless = cmd.hasOption(headlessOption.getOpt());
         autoSelect = cmd.hasOption(autoSelectOption.getOpt());
+        fastScan = cmd.hasOption(fastScanOption.getOpt());
         if (cmd.hasOption(autoRadiusOption.getOpt())) {
             try {
                 autoSelectRadiusMiles = Double.parseDouble(cmd.getOptionValue(autoRadiusOption.getOpt()));

@@ -185,7 +185,7 @@ public class MainFrame extends GQFrame {
                         .filter(StationSource::isOutdated).collect(Collectors.toList()),
                 () -> {
                     updateProgressBar("Checking Seedlink Networks...", (int) ((phase++ / (PHASES + 3)) * 100.0));
-                    databaseManager.runAvailabilityCheck(databaseManager.getStationDatabase().getSeedlinkNetworks(), () -> {
+                    databaseManager.runAvailabilityCheck(StationAutoSelector.seedlinkNetworksForScan(databaseManager), () -> {
                         if (Main.autoSelect) {
                             if (Main.autoSelectRadiusMiles > 0) {
                                 StationAutoSelector.selectWithinRadius(databaseManager, Main.autoSelectRadiusMiles);

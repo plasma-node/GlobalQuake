@@ -1,11 +1,18 @@
 package globalquake.main;
 
 import globalquake.core.Settings;
+import globalquake.core.database.Channel;
 import globalquake.core.database.Network;
+import globalquake.core.database.SeedlinkNetwork;
 import globalquake.core.database.Station;
 import globalquake.core.database.StationDatabaseManager;
 import globalquake.utils.GeoUtils;
 import org.tinylog.Logger;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Programmatic station selection, the headless equivalent of the station-select UI's Select-All
@@ -18,6 +25,44 @@ public final class StationAutoSelector {
     private static final double MILES_TO_KM = 1.60934;
 
     private StationAutoSelector() {
+    }
+
+    /** Which seedlink networks to probe in the availability check. With {@code --fastscan} we probe
+     *  only the networks that already carry a selected station (fast warm boot, fewer public-server
+     *  queries); otherwise (and as a fallback when nothing is selected yet, e.g. first boot) we probe
+     *  every known seedlink network. */
+    public static List<SeedlinkNetwork> seedlinkNetworksForScan(StationDatabaseManager stationDatabaseManager) {
+        List<SeedlinkNetwork> all = stationDatabaseManager.getStationDatabase().getSeedlinkNetworks();
+        if (!Main.fastScan) {
+            return all;
+        }
+        List<SeedlinkNetwork> filtered = networksForSelectedStations(stationDatabaseManager);
+        if (filtered.isEmpty()) {
+            Logger.info("--fastscan requested but no stations are selected yet — scanning all %d seedlink networks this boot.".formatted(all.size()));
+            return all;
+        }
+        Logger.info("--fastscan: probing only the %d seedlink networks carrying selected stations (of %d total).".formatted(filtered.size(), all.size()));
+        return filtered;
+    }
+
+    /** The seedlink networks that carry at least one currently-selected station (for --fastscan).
+     *  Empty on a fresh boot with no selection → caller should fall back to scanning all networks. */
+    public static List<SeedlinkNetwork> networksForSelectedStations(StationDatabaseManager stationDatabaseManager) {
+        Set<SeedlinkNetwork> set = new LinkedHashSet<>();
+        stationDatabaseManager.getStationDatabase().getDatabaseReadLock().lock();
+        try {
+            for (Network network : stationDatabaseManager.getStationDatabase().getNetworks()) {
+                for (Station s : network.getStations()) {
+                    Channel ch = s.getSelectedChannel();
+                    if (ch != null) {
+                        set.addAll(ch.getSeedlinkNetworks().keySet());
+                    }
+                }
+            }
+        } finally {
+            stationDatabaseManager.getStationDatabase().getDatabaseReadLock().unlock();
+        }
+        return new ArrayList<>(set);
     }
 
     /** Select every available station globally. Heavy — thousands of stations. Prefer a radius. */

@@ -382,6 +382,12 @@ public class GlobePanel extends JPanel implements GeoUtils {
     }
 
     private void handleClick(int x, int y) {
+        // Give 2D overlays (e.g. the active-quakes side list) first refusal on a click, before it is
+        // interpreted as a click on a globe feature.
+        if (overlayClicked(x, y)) {
+            return;
+        }
+
         ArrayList<RenderEntity<?>> clicked = new ArrayList<>();
         renderer.getRenderFeatures().parallelStream().forEach(feature -> {
             for (RenderEntity<?> entity : feature.getEntities()) {
@@ -412,6 +418,12 @@ public class GlobePanel extends JPanel implements GeoUtils {
     }
 
     public void featuresClicked(ArrayList<RenderEntity<?>> clicked) {
+    }
+
+    /** Hook for subclasses to consume a click that lands on a 2D screen-space overlay (returning true
+     *  suppresses the normal globe-feature hit test). Default: no overlays, never consumes. */
+    protected boolean overlayClicked(int x, int y) {
+        return false;
     }
 
     private RenderProperties createRenderProperties() {

@@ -118,7 +118,8 @@ public class FeatureArchivedEarthquake extends RenderFeature<ArchivedQuake> {
         y+=15;
 
         graphics.setColor(Color.white);
-        str = "%s".formatted(Settings.formatDateTime(Instant.ofEpochMilli(quake.getOrigin())));
+        long ageMs = GlobalQuake.instance.currentTimeMillis() - quake.getOrigin();
+        str = "%s (%s ago)".formatted(Settings.formatDateTime(Instant.ofEpochMilli(quake.getOrigin())), formatAge(ageMs));
         graphics.drawString(str, (int) (centerPonint.x - graphics.getFontMetrics().stringWidth(str) * 0.5), y);
 
         y+=30 + (int) size * 2;
@@ -135,6 +136,23 @@ public class FeatureArchivedEarthquake extends RenderFeature<ArchivedQuake> {
         str = "%d stations".formatted(quake.getAssignedStations());
         graphics.drawString(str, (int) (centerPonint.x - graphics.getFontMetrics().stringWidth(str) * 0.5), y);
 
+    }
+
+    /** Compact "time since" for the hover tooltip — archived quakes can be days old. */
+    private static String formatAge(long ms) {
+        long sec = Math.max(0, ms / 1000);
+        if (sec < 60) {
+            return sec + "s";
+        }
+        long min = sec / 60;
+        if (min < 60) {
+            return min + "m";
+        }
+        long hr = min / 60;
+        if (hr < 24) {
+            return hr + "h";
+        }
+        return (hr / 24) + "d";
     }
 
     private Color getColorStations(int assignedStations) {

@@ -63,6 +63,17 @@ public class GlobalQuakePanel extends GlobePanel {
     private volatile long lastCinemaModeEvent;
     private Earthquake lastDisplayedQuake;
 
+    // Active-quakes side list: a manually clicked quake pins the top-left detail box and pauses cinema
+    // cycling until it is unclicked or the quake disappears. All three are touched only on the EDT
+    // (paint + mouse events), so no extra synchronisation is needed.
+    private Earthquake manuallySelectedQuake;
+    private boolean cinemaWasOnBeforeManualSelect;
+    private final List<QuakeListRow> quakeListRows = new ArrayList<>();
+
+    /** A clickable row in the active-quakes side list: its on-screen box and the quake it represents. */
+    private record QuakeListRow(Rectangle2D box, Earthquake quake) {
+    }
+
     public GlobalQuakePanel(JFrame frame) {
         super(Settings.homeLat, Settings.homeLon);
 
@@ -148,12 +159,69 @@ public class GlobalQuakePanel extends GlobePanel {
     }
 
     @Override
+    protected boolean overlayClicked(int x, int y) {
+        // Snapshot the row list — it is rebuilt on the paint thread, but clicks are on the EDT too.
+        for (QuakeListRow row : new ArrayList<>(quakeListRows)) {
+            if (row.box().contains(x, y)) {
+                if (row.quake().equals(manuallySelectedQuake)) {
+                    // Clicking the already-pinned quake unpins it and resumes cinema cycling.
+                    clearManualSelection();
+                } else {
+                    selectQuakeManually(row.quake());
+                }
+                repaint();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void setCinemaMode(boolean cinemaMode) {
+        // Resuming cinema (from anywhere — the 'C' key, alerts, our own clearManualSelection) always
+        // drops a manual pin, so the box and camera can never be left stuck on a hand-picked quake.
+        if (cinemaMode) {
+            manuallySelectedQuake = null;
+        }
+        super.setCinemaMode(cinemaMode);
+    }
+
+    private void selectQuakeManually(Earthquake quake) {
+        if (manuallySelectedQuake == null) {
+            cinemaWasOnBeforeManualSelect = isCinemaMode();
+        }
+        manuallySelectedQuake = quake;
+        setCinemaMode(false); // pause cycling so the view stays on the chosen quake
+        double distMin = (GlobalQuake.instance.currentTimeMillis() - quake.getOrigin()) / (1000.0 * 60.0);
+        double zoom = Math.max(0.1, Math.min(1.6, distMin / 5.0)) / (Settings.cinemaModeZoomMultiplier / 100.0);
+        jumpTo(quake.getLat(), quake.getLon(), zoom);
+    }
+
+    /** Drop the manual pin and, if cinema was running before it, resume cycling. Safe to call when
+     *  nothing is pinned. Keeps us from getting stuck with cinema off after a pinned quake is gone. */
+    private void clearManualSelection() {
+        if (manuallySelectedQuake == null) {
+            return;
+        }
+        manuallySelectedQuake = null;
+        if (cinemaWasOnBeforeManualSelect) {
+            setCinemaMode(true);
+        }
+    }
+
+    @Override
     public void paint(Graphics gr) {
         super.paint(gr);
         Graphics2D g = (Graphics2D) gr;
 
         try {
             drawEarthquakesBox(g, 0, 0);
+        } catch (Exception e) {
+            Logger.error(e);
+        }
+
+        try {
+            drawActiveQuakesList(g);
         } catch (Exception e) {
             Logger.error(e);
         }
@@ -541,6 +609,160 @@ public class GlobalQuakePanel extends GlobePanel {
 
     public static final Color GRAY_COLOR = new Color(20, 20, 20);
 
+    /** Estimated peak ground acceleration this quake produces at the home location. */
+    private static double pgaAtHome(Earthquake q) {
+        double distGEO = GeoUtils.geologicalDistance(q.getLat(), q.getLon(), -q.getDepth(),
+                Settings.homeLat, Settings.homeLon, 0.0);
+        return GeoUtils.pgaFunction(q.getMag(), distGEO, q.getDepth());
+    }
+
+    /** Ranking used for the side list — the same priority cinema mode uses to pick its target, so the
+     *  top of the list is the quake the camera favours (magnitude, home-shaking, alert boost). */
+    private static double significance(Earthquake q) {
+        double priority = 100 + Math.max(0, q.getMag() * 100.0);
+        if (AlertManager.meetsConditions(q, true)) {
+            priority += 10000.0;
+        }
+        priority += pgaAtHome(q) * 2000.0;
+        return priority;
+    }
+
+    /** Compact age like "8s", "3m", "2h". */
+    private static String formatAge(long ms) {
+        long sec = Math.max(0, ms / 1000);
+        if (sec < 60) {
+            return sec + "s";
+        }
+        long min = sec / 60;
+        if (min < 60) {
+            return min + "m";
+        }
+        return (min / 60) + "h";
+    }
+
+    private static String truncateToWidth(Graphics2D g, String s, int maxWidth) {
+        if (maxWidth <= 0) {
+            return "";
+        }
+        FontMetrics fm = g.getFontMetrics();
+        if (fm.stringWidth(s) <= maxWidth) {
+            return s;
+        }
+        String ellipsis = "…";
+        while (s.length() > 1 && fm.stringWidth(s + ellipsis) > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s + ellipsis;
+    }
+
+    /** Top-right compact list of currently-detected quakes, sorted by {@link #significance}. Each row
+     *  shows a magnitude chip, region and age; the current cinema target is faintly lit and a
+     *  manually clicked (pinned) quake is boxed in amber. Rows are recorded for {@link #overlayClicked}. */
+    private void drawActiveQuakesList(Graphics2D g) {
+        quakeListRows.clear();
+
+        List<Earthquake> quakes = new ArrayList<>(GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes());
+        if (quakes.isEmpty()) {
+            return;
+        }
+        quakes.sort((a, b) -> Double.compare(significance(b), significance(a)));
+
+        final int maxRows = 8;
+        int shown = Math.min(maxRows, quakes.size());
+
+        Font headerFont = new Font("Calibri", Font.BOLD, 14);
+        Font rowFont = new Font("Calibri", Font.BOLD, 13);
+        Font ageFont = new Font("Calibri", Font.PLAIN, 12);
+
+        final int rowH = 22;
+        final int width = 216;
+        final int pad = 6;
+        final int headerH = 20;
+        int totalH = headerH + shown * rowH + 4;
+
+        int x = getWidth() - width - 8;
+        int y = 8;
+
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        RoundRectangle2D panel = new RoundRectangle2D.Float(x, y, width, totalH, 10, 10);
+        g.setColor(new Color(0, 0, 0, 160));
+        g.fill(panel);
+        g.setColor(new Color(0, 90, 192));
+        g.setStroke(new BasicStroke(1.5f));
+        g.draw(panel);
+
+        g.setFont(headerFont);
+        g.setColor(Color.white);
+        String header = quakes.size() > shown
+                ? "Active Quakes (%d of %d)".formatted(shown, quakes.size())
+                : "Active Quakes (%d)".formatted(quakes.size());
+        g.drawString(header, x + pad, y + 15);
+
+        long now = GlobalQuake.instance.currentTimeMillis();
+
+        for (int i = 0; i < shown; i++) {
+            Earthquake q = quakes.get(i);
+            int rowY = y + headerH + i * rowH;
+            Rectangle2D rowBox = new Rectangle2D.Float(x + 2, rowY, width - 4, rowH);
+            quakeListRows.add(new QuakeListRow(rowBox, q));
+
+            boolean pinned = q.equals(manuallySelectedQuake);
+            boolean cinemaCurrent = !pinned && manuallySelectedQuake == null && q.equals(lastDisplayedQuake);
+
+            if (pinned) {
+                g.setColor(new Color(255, 220, 80, 90));
+                g.fill(rowBox);
+                g.setColor(new Color(255, 220, 80));
+                g.setStroke(new BasicStroke(2f));
+                g.draw(rowBox);
+                g.setStroke(new BasicStroke(1f));
+            } else if (cinemaCurrent) {
+                g.setColor(new Color(255, 255, 255, 45));
+                g.fill(rowBox);
+            }
+
+            // magnitude chip
+            g.setColor(Scale.getColorEasily(q.getMag() / 8.0));
+            g.fillRoundRect(x + pad, rowY + 4, 42, rowH - 8, 6, 6);
+            g.setColor(Color.black);
+            g.setFont(rowFont);
+            String magStr = q.magnitudeFormatted();
+            g.drawString(magStr, x + pad + 21 - g.getFontMetrics().stringWidth(magStr) / 2, rowY + rowH - 7);
+
+            int regionX = x + pad + 48;
+            int ageRight = x + width - pad;
+
+            g.setFont(ageFont);
+            String age = formatAge(now - q.getOrigin());
+            int ageW = g.getFontMetrics().stringWidth(age);
+
+            // "!" badge when this quake is expected to be felt at home (>= MMI II).
+            boolean feltAtHome = pgaAtHome(q) >= MMIIntensityScale.II.getPga();
+            int feltW = feltAtHome ? 16 : 0;
+
+            g.setFont(rowFont);
+            String region = truncateToWidth(g, q.getRegion(), ageRight - ageW - 6 - feltW - regionX);
+            g.setColor(Color.white);
+            g.drawString(region, regionX, rowY + rowH - 7);
+
+            if (feltAtHome) {
+                int bx = regionX + g.getFontMetrics().stringWidth(region) + 3;
+                g.setColor(new Color(230, 60, 60));
+                g.fillOval(bx, rowY + 4, 13, 13);
+                g.setColor(Color.white);
+                g.setFont(new Font("Calibri", Font.BOLD, 11));
+                g.drawString("!", bx + 5, rowY + 14);
+            }
+
+            g.setFont(ageFont);
+            g.setColor(new Color(200, 200, 200));
+            g.drawString(age, ageRight - ageW, rowY + rowH - 7);
+        }
+
+        g.setStroke(new BasicStroke(1f));
+    }
+
     @SuppressWarnings("SameParameterValue")
     private void drawEarthquakesBox(Graphics2D g, int x, int y) {
         List<Earthquake> quakes = GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes();
@@ -552,10 +774,24 @@ public class GlobalQuakePanel extends GlobePanel {
 
         int baseWidth = g.getFontMetrics().stringWidth(string) + 12;
 
+        // A manually pinned quake (clicked in the side list) that has since disappeared must not leave
+        // the box — or cinema — stuck. Drop the pin (restoring cinema) the moment it leaves the list.
+        if (manuallySelectedQuake != null && !quakes.contains(manuallySelectedQuake)) {
+            clearManualSelection();
+        }
+
         Earthquake quake = null;
         try {
+            Earthquake pinned = manuallySelectedQuake;
+            if (pinned != null) {
+                int pinnedIndex = quakes.indexOf(pinned);
+                if (pinnedIndex != -1) {
+                    quake = pinned;
+                    displayedQuake = pinnedIndex;
+                }
+            }
             Earthquake cinemaQuake = lastCinemaModeEarthquake;
-            if (cinemaQuake != null && System.currentTimeMillis() - lastCinemaModeEvent < Settings.cinemaModeSwitchTime * 1000 + 1000) {
+            if (quake == null && cinemaQuake != null && System.currentTimeMillis() - lastCinemaModeEvent < Settings.cinemaModeSwitchTime * 1000 + 1000) {
                 int cinemaQuakeIndex = quakes.indexOf(cinemaQuake);
                 if (cinemaQuakeIndex != -1) {
                     quake = cinemaQuake;
@@ -645,7 +881,10 @@ public class GlobalQuakePanel extends GlobePanel {
                     g.drawString(quake.getRegion(), x + xOffset + 3, y + 44);
 
                     g.setColor(GlobalQuake.instance.isSimulation() ? Color.orange : Color.white);
-                    g.drawString("%s%s".formatted(Settings.formatDateTime(Instant.ofEpochMilli(quake.getOrigin())), sim), x + xOffset + 3, y + 66);
+                    g.drawString("%s (%s)%s".formatted(
+                            Settings.formatDateTime(Instant.ofEpochMilli(quake.getOrigin())),
+                            formatAge(GlobalQuake.instance.currentTimeMillis() - quake.getOrigin()),
+                            sim), x + xOffset + 3, y + 66);
 
                     g.setColor(Color.white);
                     g.setFont(new Font("Calibri", Font.BOLD, 16));

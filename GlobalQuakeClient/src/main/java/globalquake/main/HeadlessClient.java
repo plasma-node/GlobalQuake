@@ -57,7 +57,7 @@ public final class HeadlessClient {
                         .filter(StationSource::isOutdated).collect(Collectors.toList()),
                 () -> {
                     Logger.info("Checking seedlink networks...");
-                    databaseManager.runAvailabilityCheck(databaseManager.getStationDatabase().getSeedlinkNetworks(), () -> {
+                    databaseManager.runAvailabilityCheck(StationAutoSelector.seedlinkNetworksForScan(databaseManager), () -> {
                         if (autoSelect) {
                             if (autoSelectRadiusMiles > 0) {
                                 StationAutoSelector.selectWithinRadius(databaseManager, autoSelectRadiusMiles);
