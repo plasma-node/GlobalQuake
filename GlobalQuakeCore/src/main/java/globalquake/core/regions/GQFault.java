@@ -20,13 +20,17 @@ public class GQFault {
     public static final byte SLIP_NORMAL = 4;       // normal / spreading ridge
     public static final byte SLIP_REVERSE = 5;      // reverse / thrust / subduction
 
+    // Traces at/above this length count as "major" and always render (never LOD-culled).
+    public static final double MAJOR_LEN_KM = 180.0;
+
     private final int size;
     private final float[] lats;
     private final float[] lons;
     private final byte slipType;
     private final float lengthKm; // trace length; a proxy for prominence (LOD culling + line thickness)
+    private final boolean major;  // plate boundary or long trace → always shown, drawn thicker
 
-    public GQFault(List<LngLatAlt> coordinates, byte slipType) {
+    public GQFault(List<LngLatAlt> coordinates, byte slipType, boolean plateBoundary) {
         this.size = coordinates.size();
         this.lats = new float[size];
         this.lons = new float[size];
@@ -42,6 +46,7 @@ public class GQFault {
             len += GeoUtils.greatCircleDistance(lats[j - 1], lons[j - 1], lats[j], lons[j]);
         }
         this.lengthKm = (float) len;
+        this.major = plateBoundary || lengthKm >= MAJOR_LEN_KM;
     }
 
     /**
@@ -50,20 +55,7 @@ public class GQFault {
      * is reverse), so we key off the leading token before the first separator ('-', '_' or whitespace).
      */
     public static byte categorize(String slipType) {
-        if (slipType == null || slipType.isBlank()) {
-            return SLIP_UNKNOWN;
-        }
-        String token = slipType.trim().toLowerCase();
-        int cut = token.length();
-        for (int i = 0; i < token.length(); i++) {
-            char ch = token.charAt(i);
-            if (ch == '-' || ch == '_' || Character.isWhitespace(ch)) {
-                cut = i;
-                break;
-            }
-        }
-        token = token.substring(0, cut);
-        return switch (token) {
+        return switch (firstToken(slipType)) {
             case "dextral" -> SLIP_DEXTRAL;
             case "sinistral" -> SLIP_SINISTRAL;
             case "strike" -> SLIP_STRIKE_SLIP;
@@ -71,6 +63,26 @@ public class GQFault {
             case "reverse", "thrust", "subduction" -> SLIP_REVERSE;
             default -> SLIP_UNKNOWN;
         };
+    }
+
+    /** Plate-boundary structures (subduction zones, spreading ridges) — always drawn regardless of zoom. */
+    public static boolean isPlateBoundary(String slipType) {
+        String t = firstToken(slipType);
+        return t.equals("subduction") || t.equals("spreading");
+    }
+
+    private static String firstToken(String slipType) {
+        if (slipType == null || slipType.isBlank()) {
+            return "";
+        }
+        String token = slipType.trim().toLowerCase();
+        for (int i = 0; i < token.length(); i++) {
+            char ch = token.charAt(i);
+            if (ch == '-' || ch == '_' || Character.isWhitespace(ch)) {
+                return token.substring(0, i);
+            }
+        }
+        return token;
     }
 
     public int getSize() {
@@ -91,5 +103,9 @@ public class GQFault {
 
     public float getLengthKm() {
         return lengthKm;
+    }
+
+    public boolean isMajor() {
+        return major;
     }
 }

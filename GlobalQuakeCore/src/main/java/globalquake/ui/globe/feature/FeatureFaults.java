@@ -116,8 +116,9 @@ public class FeatureFaults extends RenderFeature<GQFault> {
     @Override
     public void project(GlobeRenderer renderer, RenderEntity<GQFault> entity, RenderProperties renderProperties) {
         RenderElement element = entity.getRenderElement(0);
-        // LOD: skip minor faults (and their projection cost) when zoomed out.
-        if (entity.getOriginal().getLengthKm() < minLengthForScroll(renderProperties.scroll)) {
+        // LOD: skip minor faults (and their projection cost) when zoomed out; majors always render.
+        if (!entity.getOriginal().isMajor()
+                && entity.getOriginal().getLengthKm() < minLengthForScroll(renderProperties.scroll)) {
             element.shouldDraw = false;
             return;
         }
@@ -136,12 +137,16 @@ public class FeatureFaults extends RenderFeature<GQFault> {
         if (!element.shouldDraw) {
             return;
         }
+        GQFault fault = entity.getOriginal();
         double thickness = Settings.faultLineThickness == null ? 1.0 : Settings.faultLineThickness;
-        // Prominent (long) traces draw thicker; minor ones thinner.
-        double widthFactor = 0.55 + Math.min(1.35, entity.getOriginal().getLengthKm() / 120.0);
+        // Major (plate-boundary / long) traces draw considerably thicker; minor ones thin.
+        double widthFactor = fault.isMajor()
+                ? 2.2 + Math.min(1.8, fault.getLengthKm() / 300.0)
+                : 0.55 + Math.min(1.0, fault.getLengthKm() / 120.0);
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        graphics.setColor(colorFor(entity.getOriginal().getSlipType(), Boolean.TRUE.equals(Settings.faultColorSimple)));
-        graphics.setStroke(new BasicStroke((float) Math.max(0.4, widthFactor * thickness)));
+        graphics.setStroke(new BasicStroke((float) Math.max(0.4, widthFactor * thickness),
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(colorFor(fault.getSlipType(), Boolean.TRUE.equals(Settings.faultColorSimple)));
         graphics.draw(element.getShape());
     }
 }

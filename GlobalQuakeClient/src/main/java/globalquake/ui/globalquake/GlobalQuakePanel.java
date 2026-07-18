@@ -71,6 +71,7 @@ public class GlobalQuakePanel extends GlobePanel {
     private Earthquake manuallySelectedQuake;
     private boolean cinemaWasOnBeforeManualSelect;
     private final List<QuakeListRow> quakeListRows = new ArrayList<>();
+    private int leftPanelBottom = 140; // y just below the top-left detail box (+ mag histogram), set each paint
 
     /** A clickable row in the active-quakes side list: its on-screen box and the quake it represents. */
     private record QuakeListRow(Rectangle2D box, Earthquake quake) {
@@ -762,9 +763,9 @@ public class GlobalQuakePanel extends GlobePanel {
 
         int totalH = headerH + bodyH + 4;
         int x = 6;
-        // Stapled to a fixed top just under the top-left magnitude box, so resizing the window never
-        // shoves it around or over other HUD elements.
-        int y = 140;
+        // Anchored just below the top-left magnitude box + histogram (leftPanelBottom, set by
+        // drawEarthquakesBox each paint) so it never overlaps them and never drifts on resize.
+        int y = leftPanelBottom;
 
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         RoundRectangle2D panel = new RoundRectangle2D.Float(x, y, width, totalH, 10, 10);
@@ -1047,6 +1048,16 @@ public class GlobalQuakePanel extends GlobePanel {
                 drawLocationAcc(g, quake, baseHeight + 6, x + magsWidth, baseWidth - magsWidth);
             }
         }
+
+        // Record the bottom of everything drawn on the left so the active-quakes list sits below it.
+        int bottom = baseHeight;
+        if (quake != null && Settings.displayMagnitudeHistogram) {
+            bottom = Math.max(bottom, baseHeight + 20 + 200); // drawMags histogram is 200px tall
+        }
+        if (quake != null && Settings.displayAdditionalQuakeInfo) {
+            bottom = Math.max(bottom, baseHeight + 6 + 114); // drawLocationAcc box is 114px tall
+        }
+        leftPanelBottom = bottom + 10;
     }
 
     private void drawLocationAcc(Graphics2D g, Earthquake quake, int y, int x, int width) {

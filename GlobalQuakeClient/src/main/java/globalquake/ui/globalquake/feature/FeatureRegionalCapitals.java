@@ -26,10 +26,20 @@ import java.util.List;
  */
 public class FeatureRegionalCapitals extends RenderFeature<CityLocation> {
 
+    // State/province borders (raw_polygonsUS etc.) draw up to scroll 0.5; match that so capital labels
+    // vanish exactly when the borders they belong to do.
+    private static final double LIVE_SHOW_SCROLL = 0.5;
+
     private final Collection<CityLocation> cityLocations;
+    private final boolean alwaysShow; // screenshots show them at every zoom; the live map uses a threshold
 
     public FeatureRegionalCapitals() {
+        this(false);
+    }
+
+    public FeatureRegionalCapitals(boolean alwaysShow) {
         super(1);
+        this.alwaysShow = alwaysShow;
         cityLocations = Collections.unmodifiableList(load());
     }
 
@@ -114,7 +124,10 @@ public class FeatureRegionalCapitals extends RenderFeature<CityLocation> {
         if (!element.shouldDraw) {
             return;
         }
-        // Always shown (marker + label) at every zoom, smaller than national capitals.
+        // In the live map, hide once state borders drop out (scroll >= 0.5); screenshots always show.
+        if (!alwaysShow && renderProperties.scroll >= LIVE_SHOW_SCROLL) {
+            return;
+        }
         graphics.setColor(new Color(210, 210, 210));
         graphics.setStroke(new BasicStroke(2f));
         graphics.fill(element.getShape());

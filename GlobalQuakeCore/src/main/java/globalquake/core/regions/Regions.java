@@ -480,16 +480,18 @@ public class Regions {
         stream.close();
 
         for (Feature f : featureCollection.getFeatures()) {
-            byte slipType = GQFault.categorize(f.getProperty("slip_type"));
+            String rawSlip = f.getProperty("slip_type");
+            byte slipType = GQFault.categorize(rawSlip);
+            boolean plate = GQFault.isPlateBoundary(rawSlip);
             GeoJsonObject o = f.getGeometry();
             if (o instanceof LineString ls) {
                 if (ls.getCoordinates().size() >= 2) {
-                    faults.add(new GQFault(ls.getCoordinates(), slipType));
+                    faults.add(new GQFault(ls.getCoordinates(), slipType, plate));
                 }
             } else if (o instanceof MultiLineString mls) {
                 for (List<LngLatAlt> line : mls.getCoordinates()) {
                     if (line.size() >= 2) {
-                        faults.add(new GQFault(line, slipType));
+                        faults.add(new GQFault(line, slipType, plate));
                     }
                 }
             }

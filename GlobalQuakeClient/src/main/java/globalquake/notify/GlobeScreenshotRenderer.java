@@ -82,7 +82,7 @@ public final class GlobeScreenshotRenderer {
             r.addFeature(new FeatureEarthquake(GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes()));
             r.addFeature(new FeatureCluster(GlobalQuake.instance.getClusterAnalysis().getClusters()));
             r.addFeature(new FeatureCities());
-            r.addFeature(new FeatureRegionalCapitals());
+            r.addFeature(new FeatureRegionalCapitals(true)); // always show in screenshots
             r.addFeature(new FeatureHomeLoc());
             renderer = r;
             Logger.info("Globe screenshot renderer initialised");
@@ -299,8 +299,10 @@ public final class GlobeScreenshotRenderer {
         int lineH = 15;
         int boxW = 260;
         int magW = 44;              // column for "M4.5"
-        int regionW = boxW - magW - 14;
+        int ageW = 42;              // right-aligned column for "- 4m"
+        int regionW = boxW - magW - ageW - 14;
         int shown = Math.min(6, recent.size());
+        long now = gq.currentTimeMillis();
 
         // pre-wrap so the box height fits the (possibly multi-line) region names
         List<List<String>> wrapped = new ArrayList<>();
@@ -322,14 +324,38 @@ public final class GlobeScreenshotRenderer {
 
         int yy = y + 15 + lineH;
         for (int i = 0; i < shown; i++) {
+            Earthquake q = recent.get(i);
+            int entryTopY = yy;
             g.setColor(new Color(255, 190, 90));
-            g.drawString("M%.1f".formatted(recent.get(i).getMag()), x + 8, yy);
+            g.drawString("M%.1f".formatted(q.getMag()), x + 8, yy);
             g.setColor(new Color(220, 220, 220));
             for (String ls : wrapped.get(i)) {
                 g.drawString(ls, x + magW, yy);
                 yy += lineH;
             }
+            // age, right-aligned on the entry's first line (like the live active-quakes list)
+            String age = "- " + fmtAge(now - q.getOrigin());
+            g.setColor(new Color(180, 180, 180));
+            int aw = g.getFontMetrics().stringWidth(age);
+            g.drawString(age, x + boxW - 8 - aw, entryTopY);
         }
+    }
+
+    /** Compact "time since" like 8s / 4m / 2h / 3d. */
+    private static String fmtAge(long ms) {
+        long sec = Math.max(0, ms / 1000);
+        if (sec < 60) {
+            return sec + "s";
+        }
+        long min = sec / 60;
+        if (min < 60) {
+            return min + "m";
+        }
+        long hr = min / 60;
+        if (hr < 24) {
+            return hr + "h";
+        }
+        return (hr / 24) + "d";
     }
 
     /** Word-wrap text to fit maxWidth px, up to maxLines lines (last line ellipsised if it overflows). */
