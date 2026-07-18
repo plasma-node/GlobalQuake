@@ -74,6 +74,7 @@ public class GlobalQuakePanel extends GlobePanel {
     private boolean cinemaWasOnBeforeManualSelect;
     private final List<QuakeListRow> quakeListRows = new ArrayList<>();
     private int leftPanelBottom = 140; // y just below the top-left detail box (+ mag histogram), set each paint
+    private int alertBoxTop = Integer.MAX_VALUE; // top y of the "shaking expected" box when shown, else MAX
 
     /** A clickable row in the active-quakes side list: its on-screen box and the quake it represents. */
     private record QuakeListRow(Rectangle2D box, Earthquake quake) {
@@ -233,6 +234,8 @@ public class GlobalQuakePanel extends GlobePanel {
         super.paint(gr);
         Graphics2D g = (Graphics2D) gr;
 
+        alertBoxTop = Integer.MAX_VALUE; // recomputed by drawAlertsBox if it draws this frame
+
         try {
             drawEarthquakesBox(g, 0, 0);
         } catch (Exception e) {
@@ -286,7 +289,11 @@ public class GlobalQuakePanel extends GlobePanel {
     private void drawScaleBar(Graphics2D g) {
         RenderProperties props = getRenderer().getRenderProperties();
         double milesPerPixel = MapOverlays.milesPerPixel(getRenderer(), props);
-        MapOverlays.drawScaleBar(g, getWidth() / 2, getHeight() - 22, milesPerPixel);
+        int barY = getHeight() - 22;
+        if (alertBoxTop != Integer.MAX_VALUE) {
+            barY = Math.min(barY, alertBoxTop - 12); // lift it clear of the "shaking expected" banner
+        }
+        MapOverlays.drawScaleBar(g, getWidth() / 2, barY, milesPerPixel);
     }
 
     private void drawHomeCrosshair(Graphics2D g) {
@@ -486,6 +493,7 @@ public class GlobalQuakePanel extends GlobePanel {
         }
 
         int y = getHeight() - height;
+        alertBoxTop = y; // so the bottom-centre scale bar can sit above this banner
 
         RoundRectangle2D.Double rect = new RoundRectangle2D.Double(x, y, width, height, 10, 10);
         g.setColor(color);
