@@ -94,7 +94,7 @@ public final class GlobeScreenshotRenderer {
      * @param baseScroll     globe scroll at zoomMultiplier 1.0 (config screenshotZoom)
      */
     public static byte[] renderPng(int width, int height, double lat, double lon, double zoomMultiplier,
-                                   boolean jumpToNearest, boolean showStations, double baseScroll) {
+                                   boolean jumpToNearest, boolean showStations, double baseScroll, String focusLabel) {
         if (zoomMultiplier < 0.001) {
             zoomMultiplier = 1.0;
         }
@@ -140,7 +140,7 @@ public final class GlobeScreenshotRenderer {
             Logger.error(e, "Globe render failed");
         }
 
-        drawHud(g, width, height, focus);
+        drawHud(g, width, height, focus, focusLabel);
         g.dispose();
 
         try {
@@ -180,7 +180,7 @@ public final class GlobeScreenshotRenderer {
         return best;
     }
 
-    private static void drawHud(Graphics2D g, int width, int height, Earthquake focus) {
+    private static void drawHud(Graphics2D g, int width, int height, Earthquake focus, String focusLabel) {
         Font base = new Font("SansSerif", Font.PLAIN, 12);
         Font bold = new Font("SansSerif", Font.BOLD, 13);
 
@@ -188,6 +188,14 @@ public final class GlobeScreenshotRenderer {
         g.setFont(base);
         String ts = TS.format(Instant.ofEpochMilli(System.currentTimeMillis()));
         box(g, 4, height - 22, ts, new Color(220, 220, 220));
+
+        // historical mode: a specific quake was requested — show its label, no live banner
+        if (focusLabel != null) {
+            g.setFont(bold);
+            box(g, 4, 4, focusLabel, new Color(255, 180, 70));
+            drawRecentList(g, width, height);
+            return;
+        }
 
         // focused-quake info line, top-left
         if (focus != null) {
@@ -254,27 +262,64 @@ public final class GlobeScreenshotRenderer {
         }
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        int lines = Math.min(6, recent.size());
         int lineH = 15;
-        int boxW = 240;
-        int boxH = lineH * lines + 22;
+        int boxW = 260;
+        int magW = 44;              // column for "M4.5"
+        int regionW = boxW - magW - 14;
+        int shown = Math.min(6, recent.size());
+
+        // pre-wrap so the box height fits the (possibly multi-line) region names
+        List<List<String>> wrapped = new ArrayList<>();
+        int totalLines = 0;
+        for (int i = 0; i < shown; i++) {
+            String region = recent.get(i).getRegion() == null || recent.get(i).getRegion().isBlank() ? "?" : recent.get(i).getRegion();
+            List<String> ls = wrap(g, region, regionW, 2);
+            wrapped.add(ls);
+            totalLines += ls.size();
+        }
+
+        int boxH = 22 + totalLines * lineH;
         int x = width - boxW - 6;
         int y = height - boxH - 6;
         g.setColor(new Color(0, 0, 0, 160));
         g.fillRect(x, y, boxW, boxH);
         g.setColor(new Color(200, 200, 200));
         g.drawString("Recent earthquakes", x + 8, y + 15);
-        for (int i = 0; i < lines; i++) {
-            Earthquake q = recent.get(i);
-            String region = q.getRegion() == null || q.getRegion().isBlank() ? "?" : q.getRegion();
-            if (region.length() > 26) {
-                region = region.substring(0, 25) + "…";
-            }
+
+        int yy = y + 15 + lineH;
+        for (int i = 0; i < shown; i++) {
             g.setColor(new Color(255, 190, 90));
-            g.drawString("M%.1f".formatted(q.getMag()), x + 8, y + 15 + lineH * (i + 1));
+            g.drawString("M%.1f".formatted(recent.get(i).getMag()), x + 8, yy);
             g.setColor(new Color(220, 220, 220));
-            g.drawString(region, x + 50, y + 15 + lineH * (i + 1));
+            for (String ls : wrapped.get(i)) {
+                g.drawString(ls, x + magW, yy);
+                yy += lineH;
+            }
         }
+    }
+
+    /** Word-wrap text to fit maxWidth px, up to maxLines lines (last line ellipsised if it overflows). */
+    private static List<String> wrap(Graphics2D g, String text, int maxWidth, int maxLines) {
+        List<String> out = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String trial = cur.length() == 0 ? word : cur + " " + word;
+            if (g.getFontMetrics().stringWidth(trial) <= maxWidth || cur.length() == 0) {
+                cur = new StringBuilder(trial);
+            } else {
+                out.add(cur.toString());
+                cur = new StringBuilder(word);
+                if (out.size() == maxLines - 1) {
+                    break;
+                }
+            }
+        }
+        String rest = cur.toString();
+        while (g.getFontMetrics().stringWidth(rest) > maxWidth && rest.length() > 1) {
+            rest = rest.substring(0, rest.length() - 2) + "…";
+        }
+        out.add(rest);
+        return out;
     }
 
     private static void box(Graphics2D g, int x, int y, String s, Color fg) {

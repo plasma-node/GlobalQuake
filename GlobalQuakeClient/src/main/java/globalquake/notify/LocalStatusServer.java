@@ -94,9 +94,15 @@ public class LocalStatusServer {
                   GET /log         recent ERROR-level log lines (full logs = journalctl)
                   GET /screenshot  live map PNG — shakemap hexagons, P/S waves, stations, home marker,
                                    a shaking-expected banner + recent-quakes list. Defaults to HOME.
-                                   params: ?zoom=N (1=default, higher=closer, lower=wider),
-                                   ?jumptonearest (centre on the biggest recent quake),
-                                   ?lat=&lon= (manual centre), ?stations=0 (hide stations), ?fresh=1
+                                   Renders inline in a browser; add ?download=1 to save as a file.
+                                   params:
+                                     ?zoom=N          1=default view, higher=closer, lower=wider
+                                     ?jumptonearest   centre on the biggest recent quake
+                                     ?quake=<uuid>    centre + label a specific past/live quake (id from /all)
+                                     ?lat=&lon=       manual centre
+                                     ?stations=0      hide station dots
+                                     ?download=1      send as a file download instead of inline
+                                     ?fresh=1         bypass the 1-second render cache (force a new image)
 
                 CONTROL
                   GET /sethome?lat=..&lon=..   set + persist home location (moves alerts live)
@@ -245,14 +251,28 @@ public class LocalStatusServer {
         boolean jump = queryStr(ex, "jumptonearest") != null;
         boolean stations = queryDouble(ex, "stations", 1) != 0;
         boolean fresh = queryDouble(ex, "fresh", 0) != 0;
-        String key = lat + "," + lon + "," + zoom + "," + jump + "," + stations;
+        boolean download = queryDouble(ex, "download", 0) != 0;
+
+        // ?quake=<uuid> → centre + label a specific past (archived) or live quake
+        String focusLabel = null;
+        String quakeId = queryStr(ex, "quake");
+        if (quakeId != null) {
+            QuakeFocus qf = resolveQuake(quakeId);
+            if (qf != null) {
+                lat = qf.lat();
+                lon = qf.lon();
+                focusLabel = qf.label();
+            }
+        }
+
+        String key = lat + "," + lon + "," + zoom + "," + jump + "," + stations + "," + focusLabel;
         long now = System.currentTimeMillis();
 
         byte[] png;
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom);
+            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom, focusLabel);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;
@@ -261,8 +281,44 @@ public class LocalStatusServer {
             ex.sendResponseHeaders(500, -1);
             return;
         }
+        if (download) {
+            ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"globalquake.png\"");
+        }
         ex.getResponseHeaders().set("Content-Type", "image/png");
         write(ex, png);
+    }
+
+    private record QuakeFocus(double lat, double lon, String label) {
+    }
+
+    private static QuakeFocus resolveQuake(String uuid) {
+        GlobalQuake gq = GlobalQuake.instance;
+        if (gq == null) {
+            return null;
+        }
+        try {
+            for (globalquake.core.archive.ArchivedQuake a : gq.getArchive().getArchivedQuakes()) {
+                if (a.getUuid().toString().equals(uuid)) {
+                    return new QuakeFocus(a.getLat(), a.getLon(),
+                            "M%.1f  %s  %.0fkm  (archived)".formatted(a.getMag(), rgn(a.getRegion()), a.getDepth()));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            for (globalquake.core.earthquake.data.Earthquake e : gq.getEarthquakeAnalysis().getEarthquakes()) {
+                if (e.getHypocenter() != null && e.getUuid().toString().equals(uuid)) {
+                    return new QuakeFocus(e.getLat(), e.getLon(),
+                            "M%.1f  %s  %.0fkm  (live)".formatted(e.getMag(), rgn(e.getRegion()), e.getDepth()));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static String rgn(String r) {
+        return r == null || r.isBlank() ? "?" : r;
     }
 
     private static String tail(File f, int maxBytes) {
