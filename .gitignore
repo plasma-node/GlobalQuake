@@ -53,4 +53,7 @@ science/
 .idea/
 /screenshots/
 latest/
-.ai/
+# .ai notes and .claude/memory ARE published (public repo) so work syncs across machines.
+# Keep scratch build artifacts and local Claude settings out.
+.ai/scratch/
+.claude/settings.local.json
