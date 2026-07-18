@@ -97,16 +97,17 @@ public final class GlobeScreenshotRenderer {
      */
     public static byte[] renderPng(int width, int height, double lat, double lon, double zoomMultiplier,
                                    boolean jumpToNearest, boolean showStations, double baseScroll, String focusLabel) {
-        return renderPng(width, height, lat, lon, zoomMultiplier, jumpToNearest, showStations, baseScroll, focusLabel, null);
+        return renderPng(width, height, lat, lon, zoomMultiplier, jumpToNearest, showStations, baseScroll, focusLabel, null, 1.0);
     }
 
     /**
-     * @param faultsOverride null = honour {@link Settings#displayFaultLines}; TRUE/FALSE force fault
-     *                       lines on/off for this one shot (the {@code ?faults=} param).
+     * @param faultsOverride  null = honour {@link Settings#displayFaultLines}; TRUE/FALSE force fault
+     *                        lines on/off for this one shot (the {@code ?faults=} param).
+     * @param stationSizeMul  screenshot station-dot size relative to the app's own station-size setting.
      */
     public static byte[] renderPng(int width, int height, double lat, double lon, double zoomMultiplier,
                                    boolean jumpToNearest, boolean showStations, double baseScroll, String focusLabel,
-                                   Boolean faultsOverride) {
+                                   Boolean faultsOverride, double stationSizeMul) {
         if (zoomMultiplier < 0.001) {
             zoomMultiplier = 1.0;
         }
@@ -139,8 +140,8 @@ public final class GlobeScreenshotRenderer {
             synchronized (r) {
                 Double oldMul = Settings.stationsSizeMul;
                 double base = oldMul == null ? 1.0 : oldMul;
-                // stations 50% smaller than the GUI; 0 hides them (?stations=0)
-                Settings.stationsSizeMul = showStations ? base * 0.5 : 0.0;
+                // scale station dots by the configured screenshot multiplier; 0 hides them (?stations=0)
+                Settings.stationsSizeMul = showStations ? base * stationSizeMul : 0.0;
                 Boolean oldFaults = Settings.displayFaultLines;
                 if (faultsOverride != null) {
                     Settings.displayFaultLines = faultsOverride; // ?faults=0|1 forces this one shot

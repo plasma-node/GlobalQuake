@@ -1,5 +1,6 @@
 package globalquake.core.regions;
 
+import globalquake.utils.GeoUtils;
 import org.geojson.LngLatAlt;
 
 import java.util.List;
@@ -23,6 +24,7 @@ public class GQFault {
     private final float[] lats;
     private final float[] lons;
     private final byte slipType;
+    private final float lengthKm; // trace length; a proxy for prominence (LOD culling + line thickness)
 
     public GQFault(List<LngLatAlt> coordinates, byte slipType) {
         this.size = coordinates.size();
@@ -35,6 +37,11 @@ public class GQFault {
             lons[i] = (float) c.getLongitude();
             i++;
         }
+        double len = 0;
+        for (int j = 1; j < size; j++) {
+            len += GeoUtils.greatCircleDistance(lats[j - 1], lons[j - 1], lats[j], lons[j]);
+        }
+        this.lengthKm = (float) len;
     }
 
     /**
@@ -80,5 +87,9 @@ public class GQFault {
 
     public byte getSlipType() {
         return slipType;
+    }
+
+    public float getLengthKm() {
+        return lengthKm;
     }
 }

@@ -96,7 +96,15 @@ public class GlobalQuakePanel extends GlobePanel {
                     setCinemaMode(!isCinemaMode());
                 }
                 if (e.getKeyCode() == KeyEvent.VK_F) {
-                    Settings.displayFaultLines = !Settings.displayFaultLines;
+                    // Cycle: Full colour -> Basic colour -> Hidden -> Full ...
+                    if (Settings.displayFaultLines && !Settings.faultColorSimple) {
+                        Settings.faultColorSimple = true;
+                    } else if (Settings.displayFaultLines) {
+                        Settings.displayFaultLines = false;
+                    } else {
+                        Settings.displayFaultLines = true;
+                        Settings.faultColorSimple = false;
+                    }
                     Settings.save();
                 }
             }
@@ -565,7 +573,8 @@ public class GlobalQuakePanel extends GlobePanel {
 
         settingsStrings.add(new SettingInfo("Cinema Mode (C): ", isCinemaMode() ? "Enabled" : "Disabled", isCinemaMode() ? Color.green : Color.red));
 
-        settingsStrings.add(new SettingInfo("Fault Lines (F): ", Settings.displayFaultLines ? "Shown" : "Hidden", Settings.displayFaultLines ? Color.green : Color.red));
+        String faultState = !Settings.displayFaultLines ? "Hidden" : (Settings.faultColorSimple ? "Shown (Basic)" : "Shown (Full)");
+        settingsStrings.add(new SettingInfo("Fault Lines (F): ", faultState, Settings.displayFaultLines ? Color.green : Color.red));
 
         if (GlobalQuake.instance.getStationDatabaseManager() != null && GlobalQuake.instance.getStationDatabaseManager().getStationDatabase() != null) {
             int totalStations = 0;
@@ -670,9 +679,43 @@ public class GlobalQuakePanel extends GlobePanel {
         return s + ellipsis;
     }
 
-    /** Top-right compact list of currently-detected quakes, sorted by {@link #significance}. Each row
-     *  shows a magnitude chip, region and age; the current cinema target is faintly lit and a
-     *  manually clicked (pinned) quake is boxed in amber. Rows are recorded for {@link #overlayClicked}. */
+    /** Wrap {@code text} to at most {@code maxLines} lines (line 1 up to {@code firstMaxW}, the rest
+     *  up to {@code restMaxW}); the last line is ellipsized if content remains. */
+    private static List<String> wrapRegion(Graphics2D g, String text, int firstMaxW, int restMaxW, int maxLines) {
+        FontMetrics fm = g.getFontMetrics();
+        List<String> lines = new ArrayList<>();
+        String[] words = text.trim().split("\\s+");
+        int wi = 0;
+        while (wi < words.length && lines.size() < maxLines) {
+            int maxW = lines.isEmpty() ? firstMaxW : restMaxW;
+            StringBuilder cur = new StringBuilder();
+            while (wi < words.length) {
+                String trial = cur.length() == 0 ? words[wi] : cur + " " + words[wi];
+                if (fm.stringWidth(trial) <= maxW) {
+                    cur = new StringBuilder(trial);
+                    wi++;
+                } else {
+                    break;
+                }
+            }
+            if (cur.length() == 0) { // a single word wider than the line
+                cur.append(truncateToWidth(g, words[wi], maxW));
+                wi++;
+            }
+            lines.add(cur.toString());
+        }
+        if (wi < words.length && !lines.isEmpty()) { // content left over → mark the last line
+            int li = lines.size() - 1;
+            lines.set(li, truncateToWidth(g, lines.get(li) + " …", li == 0 ? firstMaxW : restMaxW));
+        }
+        return lines;
+    }
+
+    /** Left-edge, vertically-centred list of currently-detected quakes, sorted by {@link #significance}
+     *  — sits below the top-left detail box and above the bottom-left keybind HUD. Each row shows a
+     *  magnitude chip, the region (wrapped, not cut off) and age; the current cinema target is faintly
+     *  lit and a manually clicked (pinned) quake is boxed in amber. Rows are recorded for
+     *  {@link #overlayClicked}. */
     private void drawActiveQuakesList(Graphics2D g) {
         quakeListRows.clear();
 
@@ -689,17 +732,41 @@ public class GlobalQuakePanel extends GlobePanel {
         Font rowFont = new Font("Calibri", Font.BOLD, 13);
         Font ageFont = new Font("Calibri", Font.PLAIN, 12);
 
-        final int rowH = 22;
-        final int width = 216;
+        final int width = 250;
         final int pad = 6;
         final int headerH = 20;
-        int totalH = headerH + shown * rowH + 4;
+        final int lineH = 15;
+        final int chipW = 42;
+        final int regionX0 = pad + chipW + 6; // relative to box left
+        long now = GlobalQuake.instance.currentTimeMillis();
 
-        int x = getWidth() - width - 8;
-        int y = 8;
+        // Pre-compute each row's wrapped region lines + height so we can size + centre the panel.
+        List<List<String>> rowLines = new ArrayList<>();
+        List<Integer> rowHeights = new ArrayList<>();
+        int bodyH = 0;
+        for (int i = 0; i < shown; i++) {
+            Earthquake q = quakes.get(i);
+            g.setFont(ageFont);
+            int ageW = g.getFontMetrics().stringWidth(formatAge(now - q.getOrigin()));
+            boolean felt = pgaAtHome(q) >= MMIIntensityScale.II.getPga();
+            int feltW = felt ? 16 : 0;
+            g.setFont(rowFont);
+            int firstMaxW = width - pad - regionX0 - ageW - feltW - 8;
+            int restMaxW = width - pad - regionX0;
+            List<String> lines = wrapRegion(g, q.getRegion(), firstMaxW, restMaxW, 2);
+            int h = Math.max(22, 5 + lines.size() * lineH + 4);
+            rowLines.add(lines);
+            rowHeights.add(h);
+            bodyH += h;
+        }
+
+        int totalH = headerH + bodyH + 4;
+        int x = 6;
+        int minY = 138; // below the top-left detail box
+        int maxY = Math.max(minY, getHeight() - totalH - 190); // above the keybind HUD
+        int y = Math.max(minY, Math.min(getHeight() / 2 - totalH / 2, maxY));
 
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
         RoundRectangle2D panel = new RoundRectangle2D.Float(x, y, width, totalH, 10, 10);
         g.setColor(new Color(0, 0, 0, 160));
         g.fill(panel);
@@ -714,17 +781,16 @@ public class GlobalQuakePanel extends GlobePanel {
                 : "Active Quakes (%d)".formatted(quakes.size());
         g.drawString(header, x + pad, y + 15);
 
-        long now = GlobalQuake.instance.currentTimeMillis();
-
+        int rowY = y + headerH;
         for (int i = 0; i < shown; i++) {
             Earthquake q = quakes.get(i);
-            int rowY = y + headerH + i * rowH;
-            Rectangle2D rowBox = new Rectangle2D.Float(x + 2, rowY, width - 4, rowH);
+            List<String> lines = rowLines.get(i);
+            int h = rowHeights.get(i);
+            Rectangle2D rowBox = new Rectangle2D.Float(x + 2, rowY, width - 4, h);
             quakeListRows.add(new QuakeListRow(rowBox, q));
 
             boolean pinned = q.equals(manuallySelectedQuake);
             boolean cinemaCurrent = !pinned && manuallySelectedQuake == null && q.equals(lastDisplayedQuake);
-
             if (pinned) {
                 g.setColor(new Color(255, 220, 80, 90));
                 g.fill(rowBox);
@@ -737,54 +803,63 @@ public class GlobalQuakePanel extends GlobePanel {
                 g.fill(rowBox);
             }
 
-            // magnitude chip
+            // magnitude chip (vertically centred in the row)
+            int chipY = rowY + (h - 14) / 2;
             g.setColor(Scale.getColorEasily(q.getMag() / 8.0));
-            g.fillRoundRect(x + pad, rowY + 4, 42, rowH - 8, 6, 6);
+            g.fillRoundRect(x + pad, chipY, chipW, 14, 6, 6);
             g.setColor(Color.black);
             g.setFont(rowFont);
             String magStr = q.magnitudeFormatted();
-            g.drawString(magStr, x + pad + 21 - g.getFontMetrics().stringWidth(magStr) / 2, rowY + rowH - 7);
+            g.drawString(magStr, x + pad + chipW / 2 - g.getFontMetrics().stringWidth(magStr) / 2, chipY + 12);
 
-            int regionX = x + pad + 48;
-            int ageRight = x + width - pad;
+            int regionX = x + regionX0;
+            int baseline = rowY + 5 + g.getFontMetrics().getAscent();
+            g.setFont(rowFont);
+            g.setColor(Color.white);
+            for (int li = 0; li < lines.size(); li++) {
+                g.drawString(lines.get(li), regionX, baseline + li * lineH);
+            }
 
+            // age (top-right of the row) + felt "!" badge
             g.setFont(ageFont);
             String age = formatAge(now - q.getOrigin());
             int ageW = g.getFontMetrics().stringWidth(age);
-
-            // "!" badge when this quake is expected to be felt at home (>= MMI II).
-            boolean feltAtHome = pgaAtHome(q) >= MMIIntensityScale.II.getPga();
-            int feltW = feltAtHome ? 16 : 0;
-
-            g.setFont(rowFont);
-            String region = truncateToWidth(g, q.getRegion(), ageRight - ageW - 6 - feltW - regionX);
-            g.setColor(Color.white);
-            g.drawString(region, regionX, rowY + rowH - 7);
-
-            if (feltAtHome) {
-                int bx = regionX + g.getFontMetrics().stringWidth(region) + 3;
+            boolean felt = pgaAtHome(q) >= MMIIntensityScale.II.getPga();
+            int ageRight = x + width - pad;
+            if (felt) {
+                int bx = ageRight - ageW - 18;
                 g.setColor(new Color(230, 60, 60));
                 g.fillOval(bx, rowY + 4, 13, 13);
                 g.setColor(Color.white);
                 g.setFont(new Font("Calibri", Font.BOLD, 11));
                 g.drawString("!", bx + 5, rowY + 14);
             }
-
             g.setFont(ageFont);
             g.setColor(new Color(200, 200, 200));
-            g.drawString(age, ageRight - ageW, rowY + rowH - 7);
+            g.drawString(age, ageRight - ageW, rowY + 15);
+
+            rowY += h;
         }
 
         g.setStroke(new BasicStroke(1f));
     }
 
-    /** Compact slip-type color key, bottom-right, shown only while fault lines are on. */
+    /** Compact slip-type color key, bottom-right, shown only while fault lines are on. Reflects the
+     *  active mode (Full = kinematic slip types, Basic = tectonic classes). */
     private void drawFaultLegend(Graphics2D g) {
         if (!Boolean.TRUE.equals(Settings.displayFaultLines)) {
             return;
         }
-        String[] labels = {"Dextral", "Sinistral", "Strike-slip", "Normal", "Reverse"};
-        byte[] cats = {GQFault.SLIP_DEXTRAL, GQFault.SLIP_SINISTRAL, GQFault.SLIP_STRIKE_SLIP, GQFault.SLIP_NORMAL, GQFault.SLIP_REVERSE};
+        boolean simple = Boolean.TRUE.equals(Settings.faultColorSimple);
+        String[] labels;
+        byte[] cats;
+        if (simple) {
+            labels = new String[]{"Transform", "Extensional", "Compressional"};
+            cats = new byte[]{GQFault.SLIP_STRIKE_SLIP, GQFault.SLIP_NORMAL, GQFault.SLIP_REVERSE};
+        } else {
+            labels = new String[]{"Dextral", "Sinistral", "Strike-slip", "Normal", "Reverse"};
+            cats = new byte[]{GQFault.SLIP_DEXTRAL, GQFault.SLIP_SINISTRAL, GQFault.SLIP_STRIKE_SLIP, GQFault.SLIP_NORMAL, GQFault.SLIP_REVERSE};
+        }
 
         g.setFont(new Font("Calibri", Font.PLAIN, 12));
         FontMetrics fm = g.getFontMetrics();
@@ -809,7 +884,7 @@ public class GlobalQuakePanel extends GlobePanel {
 
         int ry = y + pad + 11;
         for (int i = 0; i < labels.length; i++) {
-            g.setColor(FeatureFaults.colorFor(cats[i]));
+            g.setColor(FeatureFaults.colorFor(cats[i], simple));
             g.setStroke(new BasicStroke(3f));
             g.drawLine(x + pad, ry - 4, x + pad + swatch, ry - 4);
             g.setColor(Color.white);

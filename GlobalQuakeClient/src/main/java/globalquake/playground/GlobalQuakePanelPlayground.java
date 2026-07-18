@@ -47,7 +47,7 @@ public class GlobalQuakePanelPlayground extends GlobalQuakePanel {
                     insertType = toggle(InsertType.RANDOM_STATIONS);
                 }
 
-                if (e.getKeyCode() == KeyEvent.VK_F) {
+                if (e.getKeyCode() == KeyEvent.VK_G) { // was F; F now toggles fault lines (GlobalQuakePanel)
                     displayPlaygroundQuakes = !displayPlaygroundQuakes;
                 }
 

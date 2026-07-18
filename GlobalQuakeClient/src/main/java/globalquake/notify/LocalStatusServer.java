@@ -275,7 +275,7 @@ public class LocalStatusServer {
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom, focusLabel, faultsOverride);
+            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, jump, stations, c.screenshotZoom, focusLabel, faultsOverride, c.screenshotStationSizeMul);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;

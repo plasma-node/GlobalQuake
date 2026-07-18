@@ -68,6 +68,7 @@ public class NtfyConfig {
     public int screenshotWidth = 900;
     public int screenshotHeight = 700;
     public double screenshotZoom = 0.075; // globe scroll at zoom=1 (~one state around home)
+    public double screenshotStationSizeMul = 1.0; // station-dot size in screenshots (relative to the app setting)
     public long screenshotDebounceMs = 1000; // reuse a cached image within this window (anti-DDoS)
 
     public long fingerprintTimeToleranceMs = 30000;
@@ -135,6 +136,7 @@ public class NtfyConfig {
         screenshotWidth = intProp(p, "screenshotWidth", screenshotWidth);
         screenshotHeight = intProp(p, "screenshotHeight", screenshotHeight);
         screenshotZoom = doubleProp(p, "screenshotZoom", screenshotZoom);
+        screenshotStationSizeMul = doubleProp(p, "screenshotStationSizeMul", screenshotStationSizeMul);
         screenshotDebounceMs = longProp(p, "screenshotDebounceMs", screenshotDebounceMs);
 
         fingerprintTimeToleranceMs = longProp(p, "fingerprintTimeToleranceMs", fingerprintTimeToleranceMs);
@@ -265,6 +267,8 @@ public class NtfyConfig {
                 screenshotWidth=900
                 screenshotHeight=700
                 screenshotZoom=0.075
+                # station-dot size in screenshots relative to the app's own station-size setting
+                screenshotStationSizeMul=1.0
                 screenshotDebounceMs=1000
 
                 # Physical-quake matching (survives UUID churn / re-detections)

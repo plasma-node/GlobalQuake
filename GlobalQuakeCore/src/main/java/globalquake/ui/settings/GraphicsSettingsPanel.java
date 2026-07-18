@@ -45,6 +45,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
     private JCheckBox chkBoxCapitals;
     private JCheckBox chkBoxRegionalCapitals;
     private JCheckBox chkBoxFaultLines;
+    private JCheckBox chkBoxFaultSimpleColors;
     private JSlider sliderFaultThickness;
     private JComboBox<QualityClass> comboBoxQuality;
 
@@ -151,7 +152,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
 
         panel.add(dateFormatPanel);
 
-        JPanel mainWindowPanel = new JPanel(new GridLayout(5,2));
+        JPanel mainWindowPanel = new JPanel(new GridLayout(6,2));
         mainWindowPanel.setBorder(new TitledBorder("Main Screen"));
 
         mainWindowPanel.add(chkBoxDisplaySystemInfo = new JCheckBox("Display system info", Settings.displaySystemInfo));
@@ -164,6 +165,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         mainWindowPanel.add(chkBoxCapitals = new JCheckBox("Display capital cities", Settings.displayCapitalCities));
         mainWindowPanel.add(chkBoxRegionalCapitals = new JCheckBox("Display US/Canada state & province capitals", Settings.displayRegionalCapitals));
         mainWindowPanel.add(chkBoxFaultLines = new JCheckBox("Display fault lines (F)", Settings.displayFaultLines));
+        mainWindowPanel.add(chkBoxFaultSimpleColors = new JCheckBox("Simplified fault colors (tectonic classes)", Settings.faultColorSimple));
 
         panel.add(mainWindowPanel);
 
@@ -456,6 +458,7 @@ public class GraphicsSettingsPanel extends SettingsPanel{
         Settings.displayCapitalCities = chkBoxCapitals.isSelected();
         Settings.displayRegionalCapitals = chkBoxRegionalCapitals.isSelected();
         Settings.displayFaultLines = chkBoxFaultLines.isSelected();
+        Settings.faultColorSimple = chkBoxFaultSimpleColors.isSelected();
         Settings.faultLineThickness = sliderFaultThickness.getValue() / 100.0;
 
         Settings.qualityFilter = comboBoxQuality.getSelectedIndex();

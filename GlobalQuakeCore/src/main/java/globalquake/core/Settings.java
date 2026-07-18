@@ -146,6 +146,7 @@ public final class Settings {
     public static Boolean displayCapitalCities;
     public static Boolean displayRegionalCapitals;
     public static Boolean displayFaultLines;
+    public static Boolean faultColorSimple; // true = 3-class tectonic coloring, false = full slip-type
     public static Double faultLineThickness;
     public static Boolean alertPossibleShaking;
     public static Double alertPossibleShakingDistance;
@@ -261,6 +262,7 @@ public final class Settings {
         loadProperty("displayCapitalCities", "true");
         loadProperty("displayRegionalCapitals", "true");
         loadProperty("displayFaultLines", "true");
+        loadProperty("faultColorSimple", "false");
         loadProperty("faultLineThickness", "1.0", o -> validateDouble(0.2, 8, (Double) o));
         loadProperty("displayCityIntensities", "true");
         loadProperty("displayShakemaps", "true");
