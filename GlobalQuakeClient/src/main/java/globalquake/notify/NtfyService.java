@@ -202,6 +202,9 @@ public class NtfyService {
         t.mag = earthquake.getMag();
         t.origin = earthquake.getOrigin();
         t.region = earthquake.getRegion();
+        if (GlobalQuake.instance.isSimulation()) {
+            t.test = true; // playground/simulated quakes are flagged test in the /nearby feed
+        }
         t.updatedAt = now;
         t.removedAt = 0; // a fresh sighting resurrects a quake that was briefly removed (UUID churn)
         t.archived = false;
@@ -281,6 +284,18 @@ public class NtfyService {
             trackers.put(fp, t);
         }
         Logger.info("Injected %s test quake".formatted(strong ? "STRONG" : "nearby"));
+    }
+
+    /** Removes all injected test quakes immediately (/cleantests). Returns how many were cleared. */
+    public int clearTests() {
+        int n;
+        synchronized (lock) {
+            int before = trackers.size();
+            trackers.values().removeIf(t -> t.test);
+            n = before - trackers.size();
+        }
+        Logger.info("Cleared %d test quake(s)".formatted(n));
+        return n;
     }
 
     private NotifyTier computeTier(QuakeTracker t, double thFelt, double thStrong) {

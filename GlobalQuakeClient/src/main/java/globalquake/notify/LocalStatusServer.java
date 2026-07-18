@@ -62,6 +62,7 @@ public class LocalStatusServer {
                 ntfy.injectTestQuake(false);
                 text(ex, "test quake injected\n");
             });
+            server.createContext("/cleantests", ex -> text(ex, "cleared %d test quake(s)\n".formatted(ntfy.clearTests())));
             server.createContext("/", LocalStatusServer::docs);
 
             server.setExecutor(Executors.newFixedThreadPool(2));
@@ -91,8 +92,9 @@ public class LocalStatusServer {
                   GET /all         all detected quakes: live + archived <24h, each with "near": bool (JSON)
                   GET /stations    every selected station: network, code, lat, lon, hasData (JSON)
                   GET /log         recent ERROR-level log lines (full logs = journalctl)
-                  GET /screenshot  map PNG. params: ?lat=&lon=&zoom=&stations=1|0&fresh=1
-                                   (smaller zoom = more zoomed in; stations default on; 1s cache)
+                  GET /screenshot  live map PNG — shakemap hexagons, P/S waves, stations, home.
+                                   params: ?lat=&lon=&zoom=&fresh=1  (omit lat/lon to auto-focus the
+                                   most significant quake, else home; smaller zoom = more zoomed in)
 
                 CONTROL
                   GET /sethome?lat=..&lon=..   set + persist home location (moves alerts live)
@@ -105,6 +107,7 @@ public class LocalStatusServer {
                 TEST (verify the notify pipe without waiting for a real quake)
                   GET /testnearbyquake         inject a nearby SHAKING test alert (marked [TEST])
                   GET /testnearbyquakestrong   inject a STRONG test alert (also trips imminent)
+                  GET /cleantests              remove all injected test quakes now
                 """);
     }
 
@@ -232,19 +235,19 @@ public class LocalStatusServer {
 
     private void screenshot(HttpExchange ex, NtfyService ntfy) throws IOException {
         NtfyConfig c = ntfy.cfg();
-        double lat = queryDouble(ex, "lat", Settings.homeLat);
-        double lon = queryDouble(ex, "lon", Settings.homeLon);
-        double zoom = queryDouble(ex, "zoom", c.screenshotZoom);
-        boolean stations = queryDouble(ex, "stations", 1) != 0;
+        // NaN = "not supplied" → the renderer auto-focuses the most significant quake (else home).
+        double lat = queryDouble(ex, "lat", Double.NaN);
+        double lon = queryDouble(ex, "lon", Double.NaN);
+        double zoom = queryDouble(ex, "zoom", Double.NaN);
         boolean fresh = queryDouble(ex, "fresh", 0) != 0;
-        String key = lat + "," + lon + "," + zoom + "," + stations;
+        String key = lat + "," + lon + "," + zoom;
         long now = System.currentTimeMillis();
 
         byte[] png;
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = FlatMapRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, Settings.homeLat, Settings.homeLon, stations);
+            png = GlobeScreenshotRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, c.screenshotZoom);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;

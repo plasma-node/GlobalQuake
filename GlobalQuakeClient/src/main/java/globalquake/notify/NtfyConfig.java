@@ -64,10 +64,10 @@ public class NtfyConfig {
     public long cancelGraceMs = 60000;
 
     public long allArchivedHours = 24;  // how far back /all includes archived quakes
-    public long testTtlMs = 120000;     // test quakes auto-expire after this
+    public long testTtlMs = 300000;     // test quakes auto-expire after this (5 min)
     public int screenshotWidth = 900;
     public int screenshotHeight = 700;
-    public double screenshotZoom = 4;   // projection scroll (smaller = more zoomed in)
+    public double screenshotZoom = 0.2; // globe scroll (smaller = more zoomed in; ~0.2 ≈ one state)
     public long screenshotDebounceMs = 1000; // reuse a cached image within this window (anti-DDoS)
 
     public long fingerprintTimeToleranceMs = 30000;
@@ -259,11 +259,12 @@ public class NtfyConfig {
 
                 # /all endpoint: how far back to include archived quakes. Test quakes auto-expire.
                 allArchivedHours=24
-                testTtlMs=120000
-                # /screenshot flat-map size + zoom (smaller zoom = more zoomed in) + cache window.
+                testTtlMs=300000
+                # /screenshot size + default zoom (globe scroll; smaller = more zoomed in, 0.5 ≈ one
+                # US state) + cache window. Omit lat/lon to auto-focus the most significant quake.
                 screenshotWidth=900
                 screenshotHeight=700
-                screenshotZoom=4
+                screenshotZoom=0.2
                 screenshotDebounceMs=1000
 
                 # Physical-quake matching (survives UUID churn / re-detections)
