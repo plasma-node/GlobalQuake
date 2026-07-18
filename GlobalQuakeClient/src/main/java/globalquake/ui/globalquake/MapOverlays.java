@@ -1,5 +1,9 @@
 package globalquake.ui.globalquake;
 
+import globalquake.ui.globe.GlobeRenderer;
+import globalquake.ui.globe.Point2D;
+import globalquake.ui.globe.RenderProperties;
+
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
@@ -16,6 +20,32 @@ import java.util.Locale;
 public final class MapOverlays {
 
     private MapOverlays() {
+    }
+
+    /**
+     * Ground miles per screen pixel at the view centre, measured empirically from the actual
+     * projection (project two points a known latitude apart and divide by their pixel separation).
+     * Robust across the perspective globe's non-linear scaling; returns 0 if it can't be measured.
+     */
+    public static double milesPerPixel(GlobeRenderer r, RenderProperties props) {
+        double lat0 = props.centerLat;
+        // small baseline for zoomed-in accuracy; larger fallbacks so it still measures when zoomed out
+        for (double dLat : new double[]{0.05, 1.0, 10.0}) {
+            double lat1 = lat0 + dLat > 89.9 ? lat0 - dLat : lat0 + dLat;
+            var a = GlobeRenderer.createVec3D(new Point2D(lat0, props.centerLon));
+            var b = GlobeRenderer.createVec3D(new Point2D(lat1, props.centerLon));
+            if (!r.isAboveHorizon(a, props) || !r.isAboveHorizon(b, props)) {
+                continue;
+            }
+            var pa = r.projectPoint(a, props);
+            var pb = r.projectPoint(b, props);
+            double px = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+            if (px >= 1.0) {
+                double miles = Math.abs(lat1 - lat0) * 111.32 * 0.621371; // deg lat → km → miles
+                return miles / px;
+            }
+        }
+        return 0;
     }
 
     /** A "+" reticle centred at (cx, cy): a thick black outline for definition on light backgrounds

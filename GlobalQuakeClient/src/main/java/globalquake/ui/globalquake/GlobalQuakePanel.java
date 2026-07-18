@@ -285,7 +285,7 @@ public class GlobalQuakePanel extends GlobePanel {
 
     private void drawScaleBar(Graphics2D g) {
         RenderProperties props = getRenderer().getRenderProperties();
-        double milesPerPixel = getRenderer().pxToDeg(1, props) * 111.32 * 0.621371;
+        double milesPerPixel = MapOverlays.milesPerPixel(getRenderer(), props);
         MapOverlays.drawScaleBar(g, getWidth() / 2, getHeight() - 22, milesPerPixel);
     }
 

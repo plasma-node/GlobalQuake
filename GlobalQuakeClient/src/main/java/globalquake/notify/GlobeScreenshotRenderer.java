@@ -156,7 +156,7 @@ public final class GlobeScreenshotRenderer {
                     r.updateCamera(props);
                     r.render(g, props);
                     // local ground scale (miles per screen pixel at the centre) for the scale bar
-                    milesPerPixel = r.pxToDeg(1, props) * 111.32 * 0.621371;
+                    milesPerPixel = globalquake.ui.globalquake.MapOverlays.milesPerPixel(r, props);
                     var homeVec = GlobeRenderer.createVec3D(new globalquake.ui.globe.Point2D(Settings.homeLat, Settings.homeLon));
                     if (r.isAboveHorizon(homeVec, props)) {
                         var hp = r.projectPoint(homeVec, props);
