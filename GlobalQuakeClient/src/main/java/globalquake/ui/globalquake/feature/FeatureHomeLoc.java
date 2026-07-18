@@ -33,7 +33,7 @@ public class FeatureHomeLoc extends RenderFeature<LocationPlaceholder> {
         renderer.createCross(elementCross.getPolygon(),
                 entity.getOriginal().getLat(),
                 entity.getOriginal().getLon(), renderer
-                        .pxToDeg(8, renderProperties), 0.0);
+                        .pxToDeg(9.5, renderProperties), 0.0); // a smidge longer arms than the old 8px
     }
 
     @Override
@@ -67,9 +67,25 @@ public class FeatureHomeLoc extends RenderFeature<LocationPlaceholder> {
     public void render(GlobeRenderer renderer, Graphics2D graphics, RenderEntity<LocationPlaceholder> entity, RenderProperties renderProperties) {
         RenderElement elementCross = entity.getRenderElement(0);
         if (elementCross.shouldDraw) {
-            graphics.setColor(Color.magenta);
-            graphics.setStroke(new BasicStroke(3f));
+            // Maximum-visibility crosshair: a 1px purple outline for definition, with a 4px XOR core
+            // that inverts whatever is behind it, so it reads on land, ocean, faults or quakes alike.
+            Object oldAA = graphics.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+
+            graphics.setPaintMode();
+            graphics.setColor(new Color(170, 50, 255)); // purple outline
+            graphics.setStroke(new BasicStroke(6f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
             graphics.draw(elementCross.getShape());
+
+            graphics.setXORMode(Color.black); // XOR with black + white paint == invert background
+            graphics.setColor(Color.white);
+            graphics.setStroke(new BasicStroke(4f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            graphics.draw(elementCross.getShape());
+            graphics.setPaintMode();
+
+            if (oldAA != null) {
+                graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, oldAA);
+            }
         }
     }
 

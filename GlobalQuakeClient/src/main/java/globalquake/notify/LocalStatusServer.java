@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
 public class LocalStatusServer {
 
     private final HttpServer server;
+    private static final long START_TIME = System.currentTimeMillis();
 
     // debounced screenshot cache (anti self-DDoS)
     private volatile byte[] cachedShot;
@@ -45,6 +46,7 @@ public class LocalStatusServer {
             server.createContext("/all", ex -> json(ex, ntfy.allJson()));
             server.createContext("/stations", ex -> json(ex, stationsJson()));
             server.createContext("/status", ex -> json(ex, statusJson(ntfy)));
+            server.createContext("/version", ex -> json(ex, versionJson()));
             server.createContext("/log", LocalStatusServer::serveLog);
             server.createContext("/screenshot", ex -> self.screenshot(ex, ntfy));
             // control
@@ -87,6 +89,7 @@ public class LocalStatusServer {
                 GlobalQuake local API (loopback). All feeds are JSON; times are epoch ms + ISO.
 
                 READ
+                  GET /version     build version, uptime, station + fault-trace counts (JSON)
                   GET /status      running state, home, station total/receiving, quake counts (JSON)
                   GET /nearby      quakes affecting your configured zones, incl. test quakes (JSON)
                   GET /all         all detected quakes: live + archived <24h, each with "near": bool (JSON)
@@ -118,6 +121,22 @@ public class LocalStatusServer {
                   GET /testnearbyquakestrong   inject a STRONG test alert (also trips imminent)
                   GET /cleantests              remove all injected test quakes now
                 """);
+    }
+
+    private static String versionJson() {
+        GlobalQuake gq = GlobalQuake.instance;
+        int stations = 0;
+        boolean sim = false;
+        if (gq != null) {
+            try {
+                stations = gq.getStationManager().getStations().size();
+                sim = gq.isSimulation();
+            } catch (Exception ignored) {
+            }
+        }
+        return "{\"version\":\"%s\",\"uptimeSeconds\":%d,\"stations\":%d,\"faultTraces\":%d,\"simulation\":%s}"
+                .formatted(GlobalQuake.version, (System.currentTimeMillis() - START_TIME) / 1000,
+                        stations, globalquake.core.regions.Regions.raw_faults.size(), sim);
     }
 
     private static String statusJson(NtfyService ntfy) {

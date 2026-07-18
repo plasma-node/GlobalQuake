@@ -40,6 +40,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Renders the REAL app globe offscreen to a PNG, reusing the same feature layers as
@@ -138,6 +139,7 @@ public final class GlobeScreenshotRenderer {
         g.setColor(BG);
         g.fillRect(0, 0, width, height);
 
+        double viewMiles = 0;
         try {
             GlobeRenderer r = getRenderer();
             RenderProperties props = new RenderProperties(width, height, centerLat, centerLon, scroll);
@@ -153,6 +155,8 @@ public final class GlobeScreenshotRenderer {
                 try {
                     r.updateCamera(props);
                     r.render(g, props);
+                    // approximate ground width of the view (deg across → km → miles)
+                    viewMiles = r.pxToDeg(width, props) * 111.32 * 0.621371;
                 } finally {
                     Settings.stationsSizeMul = oldMul;
                     Settings.displayFaultLines = oldFaults;
@@ -162,7 +166,7 @@ public final class GlobeScreenshotRenderer {
             Logger.error(e, "Globe render failed");
         }
 
-        drawHud(g, width, height, focus, focusLabel, centerLat, centerLon);
+        drawHud(g, width, height, focus, focusLabel, centerLat, centerLon, viewMiles);
         g.dispose();
 
         try {
@@ -203,19 +207,25 @@ public final class GlobeScreenshotRenderer {
     }
 
     private static void drawHud(Graphics2D g, int width, int height, Earthquake focus, String focusLabel,
-                                double centerLat, double centerLon) {
+                                double centerLat, double centerLon, double viewMiles) {
         Font base = new Font("SansSerif", Font.PLAIN, 12);
         Font bold = new Font("SansSerif", Font.BOLD, 13);
 
-        // focused region (closest state/province/country to the camera centre), above the timestamp
+        // focused region (closest state/province/country to the camera centre) + approx view width,
+        // stacked just above the timestamp, bottom-left
         g.setFont(base);
         String region = null;
         try {
             region = globalquake.core.regions.Regions.getRegion(centerLat, centerLon);
         } catch (Exception ignored) {
         }
-        if (region != null && !region.isBlank()) {
-            box(g, 4, height - 40, region, new Color(150, 210, 255));
+        String label = region != null && !region.isBlank() ? region : "";
+        if (viewMiles > 0) {
+            String across = "~%s mi across".formatted(formatMiles(viewMiles));
+            label = label.isEmpty() ? across : label + "   " + across;
+        }
+        if (!label.isEmpty()) {
+            box(g, 4, height - 40, label, new Color(150, 210, 255));
         }
 
         // timestamp, bottom-left
@@ -317,7 +327,7 @@ public final class GlobeScreenshotRenderer {
         int boxH = 22 + totalLines * lineH;
         int x = width - boxW - 6;
         int y = height - boxH - 6;
-        g.setColor(new Color(0, 0, 0, 160));
+        g.setColor(new Color(0, 0, 0, 215));
         g.fillRect(x, y, boxW, boxH);
         g.setColor(new Color(200, 200, 200));
         g.drawString("Recent earthquakes", x + 8, y + 15);
@@ -333,12 +343,23 @@ public final class GlobeScreenshotRenderer {
                 g.drawString(ls, x + magW, yy);
                 yy += lineH;
             }
-            // age, right-aligned on the entry's first line (like the live active-quakes list)
-            String age = "- " + fmtAge(now - q.getOrigin());
+            // age since origin, right-aligned; "T+" makes clear it's elapsed time, not an ETA
+            String age = "T+" + fmtAge(now - q.getOrigin());
             g.setColor(new Color(180, 180, 180));
             int aw = g.getFontMetrics().stringWidth(age);
             g.drawString(age, x + boxW - 8 - aw, entryTopY);
         }
+    }
+
+    /** Round a mileage to a tidy magnitude: <100 exact, <1000 nearest 10, else nearest 100 w/ commas. */
+    private static String formatMiles(double mi) {
+        if (mi < 100) {
+            return String.valueOf(Math.round(mi));
+        }
+        if (mi < 1000) {
+            return String.valueOf(Math.round(mi / 10.0) * 10);
+        }
+        return String.format(Locale.ENGLISH, "%,d", Math.round(mi / 100.0) * 100);
     }
 
     /** Compact "time since" like 8s / 4m / 2h / 3d. */
@@ -385,7 +406,7 @@ public final class GlobeScreenshotRenderer {
     private static void box(Graphics2D g, int x, int y, String s, Color fg) {
         int w = g.getFontMetrics().stringWidth(s);
         int h = g.getFontMetrics().getHeight();
-        g.setColor(new Color(0, 0, 0, 150));
+        g.setColor(new Color(0, 0, 0, 210));
         g.fillRect(x, y, w + 8, h + 2);
         g.setColor(fg);
         g.drawString(s, x + 4, y + h - 2);
