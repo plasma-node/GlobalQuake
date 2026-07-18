@@ -56,11 +56,19 @@ public class NtfyConfig {
     public long imminentDebounceMs = 60000;
     public NotifyTier imminentMinTier = NotifyTier.SHAKING;
 
-    public long notifyDelayMs = 4000;
+    public long notifyDelayMs = 4000;   // settle delay — NEARBY only when urgentImmediate=true
+    public boolean urgentImmediate = true; // SHAKING/STRONG/IMMINENT skip the settle delay
     public double renotifyMagDelta = 0.7;
     public long rateFloorMs = 30000;
     public boolean cancelNotes = false;
     public long cancelGraceMs = 60000;
+
+    public long allArchivedHours = 24;  // how far back /all includes archived quakes
+    public long testTtlMs = 120000;     // test quakes auto-expire after this
+    public int screenshotWidth = 900;
+    public int screenshotHeight = 700;
+    public double screenshotZoom = 4;   // projection scroll (smaller = more zoomed in)
+    public long screenshotDebounceMs = 1000; // reuse a cached image within this window (anti-DDoS)
 
     public long fingerprintTimeToleranceMs = 30000;
     public double fingerprintDistanceKm = 100;
@@ -117,10 +125,17 @@ public class NtfyConfig {
         imminentMinTier = NotifyTier.parse(p.getProperty("imminentMinTier"), imminentMinTier);
 
         notifyDelayMs = longProp(p, "notifyDelayMs", notifyDelayMs);
+        urgentImmediate = Boolean.parseBoolean(p.getProperty("urgentImmediate", "true"));
         renotifyMagDelta = doubleProp(p, "renotifyMagDelta", renotifyMagDelta);
         rateFloorMs = longProp(p, "rateFloorMs", rateFloorMs);
         cancelNotes = Boolean.parseBoolean(p.getProperty("cancelNotes", "false"));
         cancelGraceMs = longProp(p, "cancelGraceMs", cancelGraceMs);
+        allArchivedHours = longProp(p, "allArchivedHours", allArchivedHours);
+        testTtlMs = longProp(p, "testTtlMs", testTtlMs);
+        screenshotWidth = intProp(p, "screenshotWidth", screenshotWidth);
+        screenshotHeight = intProp(p, "screenshotHeight", screenshotHeight);
+        screenshotZoom = doubleProp(p, "screenshotZoom", screenshotZoom);
+        screenshotDebounceMs = longProp(p, "screenshotDebounceMs", screenshotDebounceMs);
 
         fingerprintTimeToleranceMs = longProp(p, "fingerprintTimeToleranceMs", fingerprintTimeToleranceMs);
         fingerprintDistanceKm = doubleProp(p, "fingerprintDistanceKm", fingerprintDistanceKm);
@@ -235,10 +250,21 @@ public class NtfyConfig {
 
                 # Debounce / dedupe
                 notifyDelayMs=4000
+                # SHAKING/STRONG/IMMINENT skip the settle delay above (send ASAP); NEARBY still waits.
+                urgentImmediate=true
                 renotifyMagDelta=0.7
                 rateFloorMs=30000
                 cancelNotes=false
                 cancelGraceMs=60000
+
+                # /all endpoint: how far back to include archived quakes. Test quakes auto-expire.
+                allArchivedHours=24
+                testTtlMs=120000
+                # /screenshot flat-map size + zoom (smaller zoom = more zoomed in) + cache window.
+                screenshotWidth=900
+                screenshotHeight=700
+                screenshotZoom=4
+                screenshotDebounceMs=1000
 
                 # Physical-quake matching (survives UUID churn / re-detections)
                 fingerprintTimeToleranceMs=30000

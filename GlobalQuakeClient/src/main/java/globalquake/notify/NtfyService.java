@@ -4,6 +4,7 @@ import globalquake.client.GlobalQuakeLocal;
 import globalquake.core.GlobalQuake;
 import globalquake.core.Settings;
 import globalquake.core.alert.Warnable;
+import globalquake.core.archive.ArchivedQuake;
 import globalquake.core.earthquake.data.Earthquake;
 import globalquake.core.events.GlobalQuakeEventListener;
 import globalquake.core.events.specific.QuakeArchiveEvent;
@@ -33,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -68,7 +70,8 @@ public class NtfyService {
         // without pushing to your phone.
         boolean active = config.enabled || config.httpServerEnabled;
         if (!active) {
-            Logger.info("ntfy notifications disabled");
+            Logger.info("ntfy push AND local status server are both OFF — set enabled=true and/or httpServerEnabled=true in %s"
+                    .formatted(new File(GlobalQuake.mainFolder, "ntfy.properties").getAbsolutePath()));
             this.httpClient = null;
             this.tickService = null;
             this.statusServer = null;
@@ -96,8 +99,12 @@ public class NtfyService {
         this.tickService.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.SECONDS);
 
         this.statusServer = config.httpServerEnabled
-                ? LocalStatusServer.start(config.httpServerBind, config.httpServerPort, new File(GlobalQuake.mainFolder, "nearby_quakes.jsonl"))
+                ? LocalStatusServer.start(config.httpServerBind, config.httpServerPort, this)
                 : null;
+    }
+
+    NtfyConfig cfg() {
+        return config;
     }
 
     private boolean ignoreSource() {
@@ -225,17 +232,49 @@ public class NtfyService {
                     }
                 }
                 trackers.values().removeIf(t ->
-                        (t.removedAt > 0 || t.archived) && now - Math.max(t.updatedAt, t.removedAt) >= retentionMs);
+                        ((t.removedAt > 0 || t.archived) && now - Math.max(t.updatedAt, t.removedAt) >= retentionMs)
+                        || (t.test && now - t.firstSeen >= config.testTtlMs));
                 snapshot = new ArrayList<>(trackers.values());
             }
 
-            writeJsonl(snapshot);
+            writeFeed(snapshot);
         } catch (Exception e) {
             Logger.error(e, "ntfy tick failed");
         }
     }
 
+    /** Injects a synthetic TEST quake near home so the whole notify + feed path can be exercised
+     *  on a deployed headless box (no Playground). Marked test=true → "[TEST]" in the notification
+     *  and the JSON. Strong variant also trips the max-priority imminent path. Auto-expires. */
+    public void injectTestQuake(boolean strong) {
+        synchronized (lock) {
+            long now = System.currentTimeMillis();
+            String fp = "test-" + now;
+            QuakeTracker t = new QuakeTracker(fp, now);
+            t.test = true;
+            t.currentUuid = UUID.randomUUID();
+            t.lat = Settings.homeLat + 0.36; // ~40 km north of home, for a realistic S-wave ETA
+            t.lon = Settings.homeLon;
+            t.depth = 10;
+            t.mag = strong ? 7.0 : 4.5;
+            t.origin = GlobalQuake.instance.currentTimeMillis();
+            t.region = "[TEST] near home";
+            t.forcedTier = strong ? NotifyTier.STRONG : NotifyTier.SHAKING;
+            trackers.put(fp, t);
+        }
+        Logger.info("Injected %s test quake".formatted(strong ? "STRONG" : "nearby"));
+    }
+
     private NotifyTier computeTier(QuakeTracker t, double thFelt, double thStrong) {
+        if (t.forcedTier != null) { // test quake: fixed tier, real coords → real distance/ETA
+            NtfyConfig.Zone z = config.zones.isEmpty() ? null : config.zones.get(0);
+            t.bestZone = z != null ? z.name() : "home";
+            t.bestZoneLat = z != null ? z.lat() : Settings.homeLat;
+            t.bestZoneLon = z != null ? z.lon() : Settings.homeLon;
+            t.bestDistKm = GeoUtils.greatCircleDistance(t.lat, t.lon, t.bestZoneLat, t.bestZoneLon);
+            t.bestPga = t.forcedTier.atLeast(NotifyTier.STRONG) ? thStrong : thFelt; // representative, for intensity
+            return t.forcedTier;
+        }
         boolean magOkForNearby = t.mag >= config.nearbyMinMagnitude;
         NotifyTier bestTier = NotifyTier.NONE;
         NtfyConfig.Zone bestZone = null;
@@ -295,7 +334,10 @@ public class NtfyService {
         }
 
         if (!t.notified) {
-            if (now - t.firstSeen >= config.notifyDelayMs) {
+            // SHAKING and above skip the settle delay (urgent) — only NEARBY waits for magnitude
+            // to firm up, which avoids spamming borderline in-area quakes.
+            boolean urgent = config.urgentImmediate && tier.atLeast(NotifyTier.SHAKING);
+            if (urgent || now - t.firstSeen >= config.notifyDelayMs) {
                 send(t, tier);
                 t.notified = true;
                 t.lastNotifiedTier = tier;
@@ -367,8 +409,11 @@ public class NtfyService {
         double sTravel = TauPTravelTimeCalculator.getSWaveTravelTime(t.depth, angle);
         double age = (GlobalQuake.instance.currentTimeMillis() - t.origin) / 1000.0;
 
-        String title = "M%.1f - %s".formatted(t.mag, label);
+        String title = "%sM%.1f - %s".formatted(t.test ? "[TEST] " : "", t.mag, label);
         StringBuilder body = new StringBuilder();
+        if (t.test) {
+            body.append("** TEST NOTIFICATION **\n");
+        }
         if (sTravel >= 0) {
             body.append("ETA ").append(formatEta(sTravel - age)).append('\n'); // time until shaking (S wave)
         }
@@ -442,28 +487,18 @@ public class NtfyService {
         }
     }
 
-    private void writeJsonl(List<QuakeTracker> snapshot) {
+    private void writeFeed(List<QuakeTracker> snapshot) {
         if (!config.jsonlEnabled) {
             return;
         }
-        StringBuilder sb = new StringBuilder();
-        for (QuakeTracker t : snapshot) {
-            if (t.currentTier == NotifyTier.NONE) {
-                continue;
-            }
-            sb.append(String.format(Locale.ROOT,
-                    "{\"uuid\":\"%s\",\"fingerprint\":\"%s\",\"origin\":%d,\"lat\":%.4f,\"lon\":%.4f,\"depth\":%.1f,\"mag\":%.2f,\"zone\":\"%s\",\"distMi\":%.1f,\"pga\":%.4f,\"tier\":\"%s\",\"updatedAt\":%d}%n",
-                    t.currentUuid, t.fingerprint, t.origin, t.lat, t.lon, t.depth, t.mag,
-                    jsonEscape(t.bestZone), kmToMiles(t.bestDistKm), t.bestPga, t.currentTier, t.updatedAt));
-        }
-        String content = sb.toString();
+        String content = buildNearbyJson(snapshot);
         if (content.equals(lastJsonl)) {
             return; // nothing changed — avoid needless disk churn
         }
         lastJsonl = content;
 
-        File target = new File(GlobalQuake.mainFolder, "nearby_quakes.jsonl");
-        File tmp = new File(GlobalQuake.mainFolder, "nearby_quakes.jsonl.tmp");
+        File target = new File(GlobalQuake.mainFolder, "nearby_quakes.json");
+        File tmp = new File(GlobalQuake.mainFolder, "nearby_quakes.json.tmp");
         try {
             Files.writeString(tmp.toPath(), content, StandardCharsets.UTF_8);
             try {
@@ -472,8 +507,121 @@ public class NtfyService {
                 Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (Exception e) {
-            Logger.error(e, "Failed to write nearby_quakes.jsonl");
+            Logger.error(e, "Failed to write nearby_quakes.json");
         }
+    }
+
+    /** JSON array of quakes currently affecting a zone (served at /nearby and written to the file). */
+    String nearbyJson() {
+        List<QuakeTracker> snapshot;
+        synchronized (lock) {
+            snapshot = new ArrayList<>(trackers.values());
+        }
+        return buildNearbyJson(snapshot);
+    }
+
+    private String buildNearbyJson(List<QuakeTracker> snapshot) {
+        IntensityScale scale = IntensityScales.getIntensityScale();
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (QuakeTracker t : snapshot) {
+            if (t.currentTier == NotifyTier.NONE) {
+                continue;
+            }
+            Level level = scale.getLevel(t.bestPga);
+            String intensity = level != null ? level.getFullName() : "";
+            String intensityDesc = level != null ? intensityDescription(level) : "";
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            sb.append(String.format(Locale.ROOT,
+                    "{\"uuid\":\"%s\",\"fingerprint\":\"%s\",\"test\":%b,\"tier\":\"%s\",\"mag\":%.2f,\"depth\":%.1f,\"lat\":%.4f,\"lon\":%.4f,\"region\":\"%s\",\"zone\":\"%s\",\"distMi\":%.1f,\"pga\":%.4f,\"intensity\":\"%s\",\"intensityDesc\":\"%s\",\"origin\":%d,\"originTime\":\"%s\",\"updatedAt\":%d}",
+                    t.currentUuid, t.fingerprint, t.test, t.currentTier, t.mag, t.depth, t.lat, t.lon,
+                    jsonEscape(cleanRegion(t.region)), jsonEscape(t.bestZone), kmToMiles(t.bestDistKm), t.bestPga,
+                    intensity, jsonEscape(intensityDesc), t.origin, isoTime(t.origin), t.updatedAt));
+        }
+        return sb.append(']').toString();
+    }
+
+    /** JSON array of ALL detected quakes — live plus recently archived (not just zone-affecting). */
+    String allJson() {
+        if (GlobalQuake.instance == null) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder("[");
+        boolean[] first = {true};
+        try {
+            for (Earthquake q : GlobalQuake.instance.getEarthquakeAnalysis().getEarthquakes()) {
+                if (q.getHypocenter() == null || q.getOrigin() == 0) {
+                    continue;
+                }
+                appendAll(sb, first, q.getUuid().toString(), q.getLat(), q.getLon(), q.getDepth(), q.getMag(), q.getOrigin(), q.getRegion(), "live");
+            }
+        } catch (Exception ignored) {
+        }
+        long cutoff = GlobalQuake.instance.currentTimeMillis() - config.allArchivedHours * 3600_000L;
+        try {
+            for (ArchivedQuake a : GlobalQuake.instance.getArchive().getArchivedQuakes()) {
+                if (a.getOrigin() < cutoff) {
+                    break; // list is sorted newest-first
+                }
+                appendAll(sb, first, a.getUuid().toString(), a.getLat(), a.getLon(), a.getDepth(), a.getMag(), a.getOrigin(), a.getRegion(), "archived");
+            }
+        } catch (Exception ignored) {
+        }
+        return sb.append(']').toString();
+    }
+
+    private void appendAll(StringBuilder sb, boolean[] first, String uuid, double lat, double lon,
+                           double depth, double mag, long origin, String region, String source) {
+        if (!first[0]) {
+            sb.append(',');
+        }
+        first[0] = false;
+        sb.append(String.format(Locale.ROOT,
+                "{\"uuid\":\"%s\",\"source\":\"%s\",\"mag\":%.2f,\"depth\":%.1f,\"lat\":%.4f,\"lon\":%.4f,\"region\":\"%s\",\"origin\":%d,\"originTime\":\"%s\"}",
+                uuid, source, mag, depth, lat, lon, jsonEscape(cleanRegion(region)), origin, isoTime(origin)));
+    }
+
+    /** Standard worded descriptor for an intensity level (the scales store none). Detects Shindo
+     *  (numeric names) vs MMI (roman) from the level's own name. */
+    private static String intensityDescription(Level level) {
+        String n = level.getFullName();
+        if (n == null || n.isEmpty()) {
+            return "";
+        }
+        if (Character.isDigit(n.charAt(0))) { // Shindo / JMA
+            return switch (n) {
+                case "1" -> "Slight";
+                case "2" -> "Weak";
+                case "3" -> "Rather strong";
+                case "4" -> "Strong";
+                case "5-", "5+" -> "Very strong";
+                case "6-", "6+" -> "Severe";
+                case "7" -> "Extreme";
+                default -> "";
+            };
+        }
+        return switch (n) { // MMI
+            case "I" -> "Not felt";
+            case "II", "III" -> "Weak";
+            case "IV" -> "Light";
+            case "V" -> "Moderate";
+            case "VI" -> "Strong";
+            case "VII" -> "Very strong";
+            case "VIII" -> "Severe";
+            case "IX" -> "Violent";
+            default -> "Extreme"; // X, XI, XII
+        };
+    }
+
+    private static String cleanRegion(String r) {
+        return (r == null || r.isBlank()) ? "Unknown region" : r;
+    }
+
+    private static String isoTime(long epochMs) {
+        return java.time.Instant.ofEpochMilli(epochMs).toString();
     }
 
     private static String jsonEscape(String s) {

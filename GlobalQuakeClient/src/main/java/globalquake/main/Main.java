@@ -23,6 +23,7 @@ public class Main {
 
     private static boolean headless = false;
     public static boolean autoSelect = false;
+    public static double autoSelectRadiusMiles = -1; // -1 = select all (no radius limit)
 
     public static final Image LOGO = new ImageIcon(Objects.requireNonNull(ClassLoader.getSystemClassLoader().getResource("logo/logo.png"))).getImage();
 
@@ -45,13 +46,30 @@ public class Main {
         strongOnlyOption.setRequired(false);
         options.addOption(strongOnlyOption);
 
-        Option autoSelectOption = new Option("a", "autoselect", false, "automatically select all available stations after the availability scan");
+        Option autoSelectOption = new Option("a", "autoselect", false, "select ALL available stations globally (heavy: thousands of stations, high memory/CPU - prefer --autoselect-radius)");
         autoSelectOption.setRequired(false);
         options.addOption(autoSelectOption);
+
+        Option autoRadiusOption = new Option("r", "autoselect-radius", true, "select available stations within this many miles of your home location (recommended, e.g. -r 600)");
+        autoRadiusOption.setRequired(false);
+        options.addOption(autoRadiusOption);
+
+        Option homeOption = new Option("L", "home", true, "set and persist home location as lat,lon (e.g. --home 48.0,-121.0). Combine with --autoselect-radius to re-home and re-select stations for travel.");
+        homeOption.setRequired(false);
+        options.addOption(homeOption);
 
         CommandLineParser parser = new org.apache.commons.cli.BasicParser();
         HelpFormatter formatter = new HelpFormatter();
         CommandLine cmd = null;
+
+        // --help handled before parsing so it works even alongside other/invalid args (and this
+        // Commons CLI version can't register a long-only option cleanly).
+        for (String arg : args) {
+            if ("--help".equals(arg) || "-help".equals(arg)) {
+                formatter.printHelp("globalquake", options);
+                System.exit(0);
+            }
+        }
 
         // Parse CLI FIRST — parsing touches neither the error handler nor Settings, but both depend
         // on the flags it produces (headless mode, sound toggles), so their init must follow it.
@@ -66,6 +84,18 @@ public class Main {
 
         headless = cmd.hasOption(headlessOption.getOpt());
         autoSelect = cmd.hasOption(autoSelectOption.getOpt());
+        if (cmd.hasOption(autoRadiusOption.getOpt())) {
+            try {
+                autoSelectRadiusMiles = Double.parseDouble(cmd.getOptionValue(autoRadiusOption.getOpt()));
+                if (autoSelectRadiusMiles <= 0) {
+                    throw new NumberFormatException();
+                }
+                autoSelect = true;
+            } catch (NumberFormatException e) {
+                System.err.println("--autoselect-radius must be a positive number of miles");
+                System.exit(1);
+            }
+        }
 
         initErrorHandler();
         initMainDirectory();
@@ -80,6 +110,18 @@ public class Main {
         if (cmd.hasOption(strongOnlyOption.getOpt())) {
             SoundsService.strongShakingSoundOnly = true;
             Logger.info("Only the strong-shaking alert sound will play (--sound-strong-only)");
+        }
+        if (cmd.hasOption(homeOption.getOpt())) {
+            String[] parts = cmd.getOptionValue(homeOption.getOpt()).split(",");
+            try {
+                Settings.homeLat = Double.parseDouble(parts[0].trim());
+                Settings.homeLon = Double.parseDouble(parts[1].trim());
+                Settings.save();
+                Logger.info("Home location set to %.4f, %.4f (persisted)".formatted(Settings.homeLat, Settings.homeLon));
+            } catch (Exception e) {
+                System.err.println("--home must be lat,lon, e.g. --home 48.0,-121.0");
+                System.exit(1);
+            }
         }
 
         if(cmd.hasOption(maxGpuMemOption.getOpt())) {
@@ -97,7 +139,7 @@ public class Main {
         }
 
         if (headless) {
-            HeadlessClient.run(autoSelect);
+            HeadlessClient.run(autoSelect, autoSelectRadiusMiles);
         } else {
             MainFrame mainFrame = new MainFrame();
             mainFrame.setVisible(true);

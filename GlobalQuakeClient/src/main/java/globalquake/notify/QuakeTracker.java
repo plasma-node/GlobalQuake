@@ -37,6 +37,9 @@ public class QuakeTracker {
     long lastSentAt;
     boolean cancelSent;
 
+    boolean test;                  // injected via the test endpoints; marked in notif + JSON
+    NotifyTier forcedTier;         // non-null on test quakes: computeTier returns this directly
+
     QuakeTracker(String fingerprint, long now) {
         this.fingerprint = fingerprint;
         this.firstSeen = now;

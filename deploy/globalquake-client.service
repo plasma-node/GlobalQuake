@@ -9,7 +9,10 @@ User=globalquake
 # All runtime state (.GlobalQuakeData: settings, station database, ntfy.properties,
 # nearby_quakes.jsonl) is created relative to this directory.
 WorkingDirectory=/opt/globalquake
-ExecStart=/usr/bin/java -Djava.awt.headless=true -Xmx6G -jar /opt/globalquake/GlobalQuakeClient.jar --headless --autoselect --nosound
+# -Xmx caps the heap so a runaway station set can't exhaust RAM. --autoselect-radius keeps the
+# station count (and therefore memory + CPU + seedlink threads) bounded to your area. --autoselect
+# WITHOUT a radius selects thousands of stations globally and will OOM — don't use it on a server.
+ExecStart=/usr/bin/java -Djava.awt.headless=true -Xmx4G -jar /opt/globalquake/GlobalQuakeClient.jar --headless --autoselect-radius 600 --nosound
 Restart=on-failure
 RestartSec=30
 # Give the archive-on-shutdown hook time to finish.

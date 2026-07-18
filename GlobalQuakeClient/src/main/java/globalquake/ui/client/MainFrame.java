@@ -187,7 +187,11 @@ public class MainFrame extends GQFrame {
                     updateProgressBar("Checking Seedlink Networks...", (int) ((phase++ / (PHASES + 3)) * 100.0));
                     databaseManager.runAvailabilityCheck(databaseManager.getStationDatabase().getSeedlinkNetworks(), () -> {
                         if (Main.autoSelect) {
-                            StationAutoSelector.selectAllAvailable(databaseManager);
+                            if (Main.autoSelectRadiusMiles > 0) {
+                                StationAutoSelector.selectWithinRadius(databaseManager, Main.autoSelectRadiusMiles);
+                            } else {
+                                StationAutoSelector.selectAllAvailable(databaseManager);
+                            }
                         }
                         updateProgressBar("Saving...", (int) ((phase++ / (PHASES + 4)) * 100.0));
 

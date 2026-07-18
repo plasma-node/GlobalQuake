@@ -8,10 +8,34 @@ shaking alerts) as a background daemon on a machine with no desktop environment.
 | Flag | Effect |
 |------|--------|
 | `--headless` / `-h` | Run with no Swing UI at all. |
-| `--autoselect` / `-a` | After the seedlink availability scan, select every available station (no UI clicking). Re-run each boot; picks up newly available stations. |
+| `--autoselect-radius <miles>` / `-r` | **Recommended.** Select available stations within N miles of your home, prune the rest. Keeps memory/CPU/threads bounded. Re-run each boot; picks up newly available stations. |
+| `--autoselect` / `-a` | Select ALL available stations globally — **thousands of stations; will OOM a server.** Use the radius form instead. |
 | `--nosound` / `-n` | Disable all alert sounds (for a box with no audio, or where ntfy is the only alert path). |
 | `--sound-strong-only` / `-q` | Play only the strong-shaking alert sound; mute everything else. |
 | `--gpu-max-mem <GB>` / `-g` | (existing) cap CUDA GPU memory. |
+| `--help` | Print all flags and exit. |
+
+## Resource sizing (avoid OOM / CPU burn)
+
+Each selected station streams live data into an in-memory waveform buffer and runs analysis, so
+**station count is the dominant cost.** `--autoselect` (no radius) selects thousands of stations
+globally and will exhaust the heap. Always use `--autoselect-radius <miles>` on a server (e.g. `600`
+covers a wide regional area). Also set a heap cap with `-Xmx` (the unit uses `-Xmx4G`); the JVM's
+default max heap is 1/4 of RAM, which a global station set blows past.
+
+## Common gotchas
+
+- **`javax.net.ssl.SSLHandshakeException: PKIX path building failed`** on station-source updates:
+  the JVM can't validate the FDSN servers' TLS certs — the Debian JRE is missing the CA bundle.
+  Fix: `sudo apt install ca-certificates-java && sudo update-ca-certificates -f`, or use a full JDK
+  (Temurin) whose `cacerts` is populated. Not fatal if you pre-seeded `.GlobalQuakeData` (station
+  metadata is already cached and seedlink associations are restored), but new metadata won't update
+  until certs work.
+- **Nothing listening on the HTTP port / `curl 127.0.0.1:8090` refused:** the local server only
+  starts when it's enabled. Set `httpServerEnabled=true` in `.GlobalQuakeData/ntfy.properties`
+  (and, if your agent runs on another machine, `httpServerBind=0.0.0.0` + firewall it). Look for the
+  log line `Local status server on http://...`; if you instead see `ntfy push AND local status
+  server are both OFF`, that's the config.
 
 ## First run
 

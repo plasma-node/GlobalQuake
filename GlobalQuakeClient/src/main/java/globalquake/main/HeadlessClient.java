@@ -23,7 +23,7 @@ public final class HeadlessClient {
     private HeadlessClient() {
     }
 
-    public static void run(boolean autoSelect) {
+    public static void run(boolean autoSelect, double autoSelectRadiusMiles) {
         Logger.info("Starting GlobalQuake client in headless mode");
 
         try {
@@ -59,7 +59,11 @@ public final class HeadlessClient {
                     Logger.info("Checking seedlink networks...");
                     databaseManager.runAvailabilityCheck(databaseManager.getStationDatabase().getSeedlinkNetworks(), () -> {
                         if (autoSelect) {
-                            StationAutoSelector.selectAllAvailable(databaseManager);
+                            if (autoSelectRadiusMiles > 0) {
+                                StationAutoSelector.selectWithinRadius(databaseManager, autoSelectRadiusMiles);
+                            } else {
+                                StationAutoSelector.selectAllAvailable(databaseManager);
+                            }
                         }
                         try {
                             databaseManager.save();
