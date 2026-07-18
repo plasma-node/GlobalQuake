@@ -17,13 +17,10 @@ import java.util.Locale;
 import java.util.concurrent.Executors;
 
 /**
- * Tiny localhost HTTP server exposing the quake feed, status, log, a map screenshot, a way to set
- * home, and test-injection endpoints — so a local agent can poll over HTTP and a deployed headless
- * box can be exercised/controlled without the Playground UI. Plain HTTP, loopback by design.
+ * Tiny localhost HTTP server exposing the quake feed, status/control, a map screenshot, and
+ * test-injection endpoints — so a local agent can poll AND control a deployed headless box without
+ * the Playground UI. Plain HTTP, loopback by design (front with a reverse proxy for remote/HTTPS).
  * No external deps (JDK com.sun.net.httpserver).
- * <p>
- * Endpoints: /nearby, /all (JSON), /status (JSON), /log (recent error log), /screenshot (PNG,
- * debounced), /sethome?lat&amp;lon (persist home), /testnearbyquake[strong] (inject a test alert).
  */
 public class LocalStatusServer {
 
@@ -43,13 +40,20 @@ public class LocalStatusServer {
             HttpServer server = HttpServer.create(new InetSocketAddress(bind, port), 0);
             LocalStatusServer self = new LocalStatusServer(server);
 
+            // read-only feeds
             server.createContext("/nearby", ex -> json(ex, ntfy.nearbyJson()));
             server.createContext("/all", ex -> json(ex, ntfy.allJson()));
+            server.createContext("/stations", ex -> json(ex, stationsJson()));
             server.createContext("/status", ex -> json(ex, statusJson(ntfy)));
             server.createContext("/log", LocalStatusServer::serveLog);
-            server.createContext("/sethome", LocalStatusServer::setHome);
             server.createContext("/screenshot", ex -> self.screenshot(ex, ntfy));
-            // longest-prefix match: "...strong" resolves to its own context, not "/testnearbyquake"
+            // control
+            server.createContext("/sethome", LocalStatusServer::setHome);
+            server.createContext("/togglentfy", ex -> toggleNtfy(ex, ntfy));
+            server.createContext("/clearquakes", LocalStatusServer::clearQuakes);
+            server.createContext("/restart", LocalStatusServer::restart);
+            server.createContext("/shutdown", LocalStatusServer::shutdown);
+            // test injection (longest-prefix: "...strong" resolves before "/testnearbyquake")
             server.createContext("/testnearbyquakestrong", ex -> {
                 ntfy.injectTestQuake(true);
                 text(ex, "strong test quake injected\n");
@@ -58,26 +62,50 @@ public class LocalStatusServer {
                 ntfy.injectTestQuake(false);
                 text(ex, "test quake injected\n");
             });
-            server.createContext("/", ex -> text(ex, """
-                    GlobalQuake local feed:
-                      /status     running state, station + quake counts, home (JSON)
-                      /nearby     quakes affecting your zones (JSON)
-                      /all        all detected quakes, live + recent archived (JSON)
-                      /log        recent error log
-                      /screenshot map PNG (optional ?lat=&lon=&zoom=&fresh=1)
-                      /sethome?lat=..&lon=..   set + persist home location
-                      /testnearbyquake        inject a nearby test alert
-                      /testnearbyquakestrong  inject a strong test alert
-                    """));
+            server.createContext("/", LocalStatusServer::docs);
 
             server.setExecutor(Executors.newFixedThreadPool(2));
             server.start();
-            Logger.info("Local status server on http://%s:%d/ (/status /nearby /all /screenshot /sethome /log /testnearbyquake[strong])".formatted(bind, port));
+            Logger.info("Local status server on http://%s:%d/ (see / for the endpoint list)".formatted(bind, port));
             return self;
+        } catch (java.net.BindException e) {
+            Logger.error("############################################################");
+            Logger.error("# LOCAL STATUS SERVER DID NOT START: %s:%d is already in use.".formatted(bind, port));
+            Logger.error("# Another GlobalQuake instance is almost certainly still running.");
+            Logger.error("# Stop it first (only ONE instance can hold the port). HTTP endpoints are OFF for this process.");
+            Logger.error("############################################################");
+            return null;
         } catch (IOException e) {
             Logger.error(e, "Failed to start local status server");
             return null;
         }
+    }
+
+    private static void docs(HttpExchange ex) throws IOException {
+        text(ex, """
+                GlobalQuake local API (loopback). All feeds are JSON; times are epoch ms + ISO.
+
+                READ
+                  GET /status      running state, home, station total/receiving, quake counts (JSON)
+                  GET /nearby      quakes affecting your configured zones, incl. test quakes (JSON)
+                  GET /all         all detected quakes: live + archived <24h, each with "near": bool (JSON)
+                  GET /stations    every selected station: network, code, lat, lon, hasData (JSON)
+                  GET /log         recent ERROR-level log lines (full logs = journalctl)
+                  GET /screenshot  map PNG. params: ?lat=&lon=&zoom=&stations=1|0&fresh=1
+                                   (smaller zoom = more zoomed in; stations default on; 1s cache)
+
+                CONTROL
+                  GET /sethome?lat=..&lon=..   set + persist home location (moves alerts live)
+                  GET /togglentfy[?enabled=true|false]   turn phone push on/off (flips if no param)
+                  GET /clearquakes             clear the archived-quake history (destructive)
+                  GET /restart                 exit non-zero so systemd relaunches (re-selects stations
+                                               around current home — use after /sethome when travelling)
+                  GET /shutdown                exit cleanly (stays down under Restart=on-failure)
+
+                TEST (verify the notify pipe without waiting for a real quake)
+                  GET /testnearbyquake         inject a nearby SHAKING test alert (marked [TEST])
+                  GET /testnearbyquakestrong   inject a STRONG test alert (also trips imminent)
+                """);
     }
 
     private static String statusJson(NtfyService ntfy) {
@@ -112,6 +140,28 @@ public class LocalStatusServer {
                 gq != null, sim, Settings.homeLat, Settings.homeLon, total, receiving, live, archived, ntfy.cfg().enabled);
     }
 
+    private static String stationsJson() {
+        GlobalQuake gq = GlobalQuake.instance;
+        StringBuilder sb = new StringBuilder("[");
+        if (gq != null) {
+            boolean first = true;
+            try {
+                for (AbstractStation s : gq.getStationManager().getStations()) {
+                    if (!first) {
+                        sb.append(',');
+                    }
+                    first = false;
+                    sb.append(String.format(Locale.ROOT,
+                            "{\"network\":\"%s\",\"code\":\"%s\",\"channel\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"hasData\":%b}",
+                            esc(s.getNetworkCode()), esc(s.getStationCode()), esc(s.getChannelName()),
+                            s.getLatitude(), s.getLongitude(), s.hasData()));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return sb.append(']').toString();
+    }
+
     private static void setHome(HttpExchange ex) throws IOException {
         double lat = queryDouble(ex, "lat", Double.NaN);
         double lon = queryDouble(ex, "lon", Double.NaN);
@@ -123,7 +173,52 @@ public class LocalStatusServer {
         Settings.homeLon = lon;
         Settings.save();
         Logger.info("Home location set via /sethome to %.4f, %.4f".formatted(lat, lon));
-        text(ex, "home set to %.4f, %.4f (persisted)\n".formatted(lat, lon));
+        text(ex, "home set to %.4f, %.4f (persisted). Note: station selection does NOT change until a /restart.\n".formatted(lat, lon));
+    }
+
+    private static void toggleNtfy(HttpExchange ex, NtfyService ntfy) throws IOException {
+        String v = queryStr(ex, "enabled");
+        boolean now = (v == null) ? ntfy.setPushEnabled(!ntfy.cfg().enabled) : ntfy.setPushEnabled(Boolean.parseBoolean(v));
+        text(ex, "ntfy push " + (now ? "enabled" : "disabled") + " (runtime only; edit ntfy.properties to persist)\n");
+    }
+
+    private static void clearQuakes(HttpExchange ex) throws IOException {
+        int n = 0;
+        if (GlobalQuake.instance != null) {
+            try {
+                var arch = GlobalQuake.instance.getArchive().getArchivedQuakes();
+                n = arch.size();
+                arch.clear();
+                GlobalQuake.instance.getArchive().saveArchive();
+            } catch (Exception e) {
+                Logger.error(e, "clearquakes failed");
+            }
+        }
+        Logger.warn("Cleared %d archived quakes via /clearquakes".formatted(n));
+        text(ex, "cleared %d archived quakes\n".formatted(n));
+    }
+
+    private static void restart(HttpExchange ex) throws IOException {
+        text(ex, "restarting (systemd Restart=on-failure will relaunch)...\n");
+        Logger.warn("Restart requested via /restart — exiting non-zero for the service manager to relaunch");
+        exitAfterResponse(2);
+    }
+
+    private static void shutdown(HttpExchange ex) throws IOException {
+        text(ex, "shutting down...\n");
+        Logger.warn("Shutdown requested via /shutdown — exiting cleanly");
+        exitAfterResponse(0);
+    }
+
+    private static void exitAfterResponse(int code) {
+        // small delay so the HTTP response flushes before the JVM exits (shutdown hook saves archive)
+        new Thread(() -> {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException ignored) {
+            }
+            System.exit(code);
+        }, "http-exit").start();
     }
 
     private static void serveLog(HttpExchange ex) throws IOException {
@@ -140,15 +235,16 @@ public class LocalStatusServer {
         double lat = queryDouble(ex, "lat", Settings.homeLat);
         double lon = queryDouble(ex, "lon", Settings.homeLon);
         double zoom = queryDouble(ex, "zoom", c.screenshotZoom);
+        boolean stations = queryDouble(ex, "stations", 1) != 0;
         boolean fresh = queryDouble(ex, "fresh", 0) != 0;
-        String key = lat + "," + lon + "," + zoom;
+        String key = lat + "," + lon + "," + zoom + "," + stations;
         long now = System.currentTimeMillis();
 
         byte[] png;
         if (!fresh && cachedShot != null && key.equals(cachedShotKey) && now - cachedShotAt < c.screenshotDebounceMs) {
             png = cachedShot; // reuse recent render (anti-DDoS)
         } else {
-            png = FlatMapRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, Settings.homeLat, Settings.homeLon);
+            png = FlatMapRenderer.renderPng(c.screenshotWidth, c.screenshotHeight, lat, lon, zoom, Settings.homeLat, Settings.homeLon, stations);
             cachedShot = png;
             cachedShotAt = now;
             cachedShotKey = key;
@@ -174,6 +270,10 @@ public class LocalStatusServer {
         }
     }
 
+    private static String esc(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     private static void json(HttpExchange ex, String body) throws IOException {
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
@@ -197,21 +297,29 @@ public class LocalStatusServer {
     }
 
     private static double queryDouble(HttpExchange ex, String key, double def) {
+        String v = queryStr(ex, key);
+        if (v == null) {
+            return def;
+        }
+        try {
+            return Double.parseDouble(v);
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
+    private static String queryStr(HttpExchange ex, String key) {
         String q = ex.getRequestURI().getQuery();
         if (q == null) {
-            return def;
+            return null;
         }
         for (String p : q.split("&")) {
             int i = p.indexOf('=');
             if (i > 0 && p.substring(0, i).equals(key)) {
-                try {
-                    return Double.parseDouble(p.substring(i + 1));
-                } catch (NumberFormatException e) {
-                    return def;
-                }
+                return p.substring(i + 1);
             }
         }
-        return def;
+        return null;
     }
 
     public void stop() {

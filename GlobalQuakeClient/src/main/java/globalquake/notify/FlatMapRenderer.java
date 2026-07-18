@@ -5,6 +5,7 @@ import globalquake.core.archive.ArchivedQuake;
 import globalquake.core.earthquake.data.Earthquake;
 import globalquake.core.regions.GQPolygon;
 import globalquake.core.regions.Regions;
+import globalquake.core.station.AbstractStation;
 import org.tinylog.Logger;
 
 import javax.imageio.ImageIO;
@@ -33,7 +34,7 @@ public final class FlatMapRenderer {
     }
 
     public static byte[] renderPng(int width, int height, double centerLat, double centerLon, double scroll,
-                                   double homeLat, double homeLon) {
+                                   double homeLat, double homeLon, boolean showStations) {
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -58,6 +59,22 @@ public final class FlatMapRenderer {
                 g.fill(awt);
                 g.setColor(borderC);
                 g.draw(awt);
+            }
+        }
+
+        // stations first (drawn under quakes) — small dots: green = receiving data, gray = not
+        if (showStations && GlobalQuake.instance != null) {
+            try {
+                for (AbstractStation s : GlobalQuake.instance.getStationManager().getStations()) {
+                    double x = getX(s.getLongitude(), centerLon, scroll, width);
+                    double y = getY(s.getLatitude(), centerLat, scroll, height);
+                    if (x < 0 || y < 0 || x > width || y > height) {
+                        continue;
+                    }
+                    g.setColor(s.hasData() ? new Color(60, 200, 90) : new Color(120, 120, 120));
+                    g.fillOval((int) x - 1, (int) y - 1, 3, 3);
+                }
+            } catch (Exception ignored) {
             }
         }
 

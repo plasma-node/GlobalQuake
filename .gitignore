@@ -57,3 +57,9 @@ latest/
 # Keep scratch build artifacts and local Claude settings out.
 .ai/scratch/
 .claude/settings.local.json
+
+# for ai to OCR
+./ai_screenshots/
+
+.ai_screenshots/Webscreenshot.png
+.ai_screenshots/Playground.png

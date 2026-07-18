@@ -304,8 +304,8 @@ public final class Settings {
         loadProperty("maxArchivedQuakes", "100", o -> validateInt(1, Integer.MAX_VALUE, (Integer) o));
 
         loadProperty("enableAlarmDialogs", "false");
-        loadProperty("homeLat", "0.0", o -> validateDouble(-90, 90, (Double) o));
-        loadProperty("homeLon", "0.0", o -> validateDouble(-180, 180, (Double) o));
+        loadProperty("homeLat", "47.6", o -> validateDouble(-90, 90, (Double) o));
+        loadProperty("homeLon", "-122.33", o -> validateDouble(-180, 180, (Double) o));
         loadProperty("displayArchivedQuakes", "true");
         loadProperty("enableSound", "true");
         loadProperty("pWaveInaccuracyThreshold", String.valueOf(pWaveInaccuracyThresholdDefault));

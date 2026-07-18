@@ -107,6 +107,24 @@ public class NtfyService {
         return config;
     }
 
+    /** Runtime toggle of phone push (in-memory; reverts to the file value on restart). The status
+     *  feed keeps running either way. */
+    boolean setPushEnabled(boolean enabled) {
+        config.enabled = enabled;
+        Logger.info("ntfy push %s via endpoint".formatted(enabled ? "ENABLED" : "DISABLED"));
+        return config.enabled;
+    }
+
+    /** True if the epicenter is within any configured zone's radius (used for the /all "near" flag). */
+    boolean isNear(double lat, double lon) {
+        for (NtfyConfig.Zone z : config.zones) {
+            if (GeoUtils.greatCircleDistance(lat, lon, z.lat(), z.lon()) <= z.radiusKm()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean ignoreSource() {
         return GlobalQuake.instance.isSimulation() && !config.allowSimulated;
     }
@@ -580,8 +598,8 @@ public class NtfyService {
         }
         first[0] = false;
         sb.append(String.format(Locale.ROOT,
-                "{\"uuid\":\"%s\",\"source\":\"%s\",\"mag\":%.2f,\"depth\":%.1f,\"lat\":%.4f,\"lon\":%.4f,\"region\":\"%s\",\"origin\":%d,\"originTime\":\"%s\"}",
-                uuid, source, mag, depth, lat, lon, jsonEscape(cleanRegion(region)), origin, isoTime(origin)));
+                "{\"uuid\":\"%s\",\"source\":\"%s\",\"near\":%b,\"mag\":%.2f,\"depth\":%.1f,\"lat\":%.4f,\"lon\":%.4f,\"region\":\"%s\",\"origin\":%d,\"originTime\":\"%s\"}",
+                uuid, source, isNear(lat, lon), mag, depth, lat, lon, jsonEscape(cleanRegion(region)), origin, isoTime(origin)));
     }
 
     /** Standard worded descriptor for an intensity level (the scales store none). Detects Shindo
