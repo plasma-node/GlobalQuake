@@ -22,7 +22,6 @@ import globalquake.ui.globalquake.feature.FeatureRegionalCapitals;
 import globalquake.ui.globalquake.feature.FeatureCluster;
 import globalquake.ui.globalquake.feature.FeatureEarthquake;
 import globalquake.ui.globalquake.feature.FeatureGlobalStation;
-import globalquake.ui.globalquake.feature.FeatureHomeLoc;
 import globalquake.ui.globalquake.feature.FeatureShakemap;
 import globalquake.utils.GeoUtils;
 import org.tinylog.Logger;
@@ -40,7 +39,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Renders the REAL app globe offscreen to a PNG, reusing the same feature layers as
@@ -84,7 +82,7 @@ public final class GlobeScreenshotRenderer {
             r.addFeature(new FeatureCluster(GlobalQuake.instance.getClusterAnalysis().getClusters()));
             r.addFeature(new FeatureCities());
             r.addFeature(new FeatureRegionalCapitals(true)); // always show in screenshots
-            r.addFeature(new FeatureHomeLoc());
+            // home crosshair drawn on top afterwards via MapOverlays (see renderPng)
             renderer = r;
             Logger.info("Globe screenshot renderer initialised");
             return r;
@@ -139,7 +137,9 @@ public final class GlobeScreenshotRenderer {
         g.setColor(BG);
         g.fillRect(0, 0, width, height);
 
-        double viewMiles = 0;
+        double milesPerPixel = 0;
+        boolean homeAbove = false;
+        int homeX = 0, homeY = 0;
         try {
             GlobeRenderer r = getRenderer();
             RenderProperties props = new RenderProperties(width, height, centerLat, centerLon, scroll);
@@ -155,8 +155,15 @@ public final class GlobeScreenshotRenderer {
                 try {
                     r.updateCamera(props);
                     r.render(g, props);
-                    // approximate ground width of the view (deg across → km → miles)
-                    viewMiles = r.pxToDeg(width, props) * 111.32 * 0.621371;
+                    // local ground scale (miles per screen pixel at the centre) for the scale bar
+                    milesPerPixel = r.pxToDeg(1, props) * 111.32 * 0.621371;
+                    var homeVec = GlobeRenderer.createVec3D(new globalquake.ui.globe.Point2D(Settings.homeLat, Settings.homeLon));
+                    if (r.isAboveHorizon(homeVec, props)) {
+                        var hp = r.projectPoint(homeVec, props);
+                        homeAbove = true;
+                        homeX = (int) Math.round(hp.x);
+                        homeY = (int) Math.round(hp.y);
+                    }
                 } finally {
                     Settings.stationsSizeMul = oldMul;
                     Settings.displayFaultLines = oldFaults;
@@ -166,7 +173,11 @@ public final class GlobeScreenshotRenderer {
             Logger.error(e, "Globe render failed");
         }
 
-        drawHud(g, width, height, focus, focusLabel, centerLat, centerLon, viewMiles);
+        drawHud(g, width, height, focus, focusLabel, centerLat, centerLon);
+        globalquake.ui.globalquake.MapOverlays.drawScaleBar(g, width / 2, height - 20, milesPerPixel);
+        if (homeAbove && Boolean.TRUE.equals(Settings.displayHomeLocation)) {
+            globalquake.ui.globalquake.MapOverlays.drawCrosshair(g, homeX, homeY);
+        }
         g.dispose();
 
         try {
@@ -207,25 +218,19 @@ public final class GlobeScreenshotRenderer {
     }
 
     private static void drawHud(Graphics2D g, int width, int height, Earthquake focus, String focusLabel,
-                                double centerLat, double centerLon, double viewMiles) {
+                                double centerLat, double centerLon) {
         Font base = new Font("SansSerif", Font.PLAIN, 12);
         Font bold = new Font("SansSerif", Font.BOLD, 13);
 
-        // focused region (closest state/province/country to the camera centre) + approx view width,
-        // stacked just above the timestamp, bottom-left
+        // focused region (closest state/province/country to the camera centre), above the timestamp
         g.setFont(base);
         String region = null;
         try {
             region = globalquake.core.regions.Regions.getRegion(centerLat, centerLon);
         } catch (Exception ignored) {
         }
-        String label = region != null && !region.isBlank() ? region : "";
-        if (viewMiles > 0) {
-            String across = "~%s mi across".formatted(formatMiles(viewMiles));
-            label = label.isEmpty() ? across : label + "   " + across;
-        }
-        if (!label.isEmpty()) {
-            box(g, 4, height - 40, label, new Color(150, 210, 255));
+        if (region != null && !region.isBlank()) {
+            box(g, 4, height - 40, region, new Color(150, 210, 255));
         }
 
         // timestamp, bottom-left
@@ -349,17 +354,6 @@ public final class GlobeScreenshotRenderer {
             int aw = g.getFontMetrics().stringWidth(age);
             g.drawString(age, x + boxW - 8 - aw, entryTopY);
         }
-    }
-
-    /** Round a mileage to a tidy magnitude: <100 exact, <1000 nearest 10, else nearest 100 w/ commas. */
-    private static String formatMiles(double mi) {
-        if (mi < 100) {
-            return String.valueOf(Math.round(mi));
-        }
-        if (mi < 1000) {
-            return String.valueOf(Math.round(mi / 10.0) * 10);
-        }
-        return String.format(Locale.ENGLISH, "%,d", Math.round(mi / 100.0) * 100);
     }
 
     /** Compact "time since" like 8s / 4m / 2h / 3d. */

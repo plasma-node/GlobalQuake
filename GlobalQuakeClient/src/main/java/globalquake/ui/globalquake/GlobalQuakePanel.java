@@ -31,6 +31,8 @@ import globalquake.sounds.Sounds;
 import globalquake.ui.StationMonitor;
 import globalquake.ui.globalquake.feature.*;
 import globalquake.ui.globe.GlobePanel;
+import globalquake.ui.globe.GlobeRenderer;
+import globalquake.ui.globe.RenderProperties;
 import globalquake.ui.globe.feature.RenderEntity;
 import globalquake.core.Settings;
 import globalquake.utils.Scale;
@@ -145,7 +147,8 @@ public class GlobalQuakePanel extends GlobePanel {
         getRenderer().addFeature(new FeatureCluster(GlobalQuake.instance.getClusterAnalysis().getClusters()));
         getRenderer().addFeature(new FeatureCities());
         getRenderer().addFeature(new FeatureRegionalCapitals());
-        getRenderer().addFeature(new FeatureHomeLoc());
+        // Home crosshair is drawn as a top-most screen-space overlay in paint(), not a globe feature,
+        // so it stays perfectly aligned and on top of everything (labels + HUD).
     }
 
     @Override
@@ -265,6 +268,38 @@ public class GlobalQuakePanel extends GlobePanel {
                 Logger.error(e);
             }
         }
+
+        try {
+            drawScaleBar(g);
+        } catch (Exception e) {
+            Logger.error(e);
+        }
+
+        // Crosshair last of all → guaranteed on top of every feature and overlay.
+        try {
+            drawHomeCrosshair(g);
+        } catch (Exception e) {
+            Logger.error(e);
+        }
+    }
+
+    private void drawScaleBar(Graphics2D g) {
+        RenderProperties props = getRenderer().getRenderProperties();
+        double milesPerPixel = getRenderer().pxToDeg(1, props) * 111.32 * 0.621371;
+        MapOverlays.drawScaleBar(g, getWidth() / 2, getHeight() - 22, milesPerPixel);
+    }
+
+    private void drawHomeCrosshair(Graphics2D g) {
+        if (!Boolean.TRUE.equals(Settings.displayHomeLocation)) {
+            return;
+        }
+        RenderProperties props = getRenderer().getRenderProperties();
+        var vec = GlobeRenderer.createVec3D(new globalquake.ui.globe.Point2D(Settings.homeLat, Settings.homeLon));
+        if (!getRenderer().isAboveHorizon(vec, props)) {
+            return;
+        }
+        var sp = getRenderer().projectPoint(vec, props);
+        MapOverlays.drawCrosshair(g, (int) Math.round(sp.x), (int) Math.round(sp.y));
     }
 
     public static String formatNumber(double number) {
